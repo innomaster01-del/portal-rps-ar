@@ -55,7 +55,7 @@ import static io.github.innomaster01del.portalrps.HandMath.SCISSORS;
 
 public class MainActivity extends AppCompatActivity implements GLSurfaceView.Renderer, HandTracker.Listener, Net.Listener {
     private static final String TAG = "PortalRPS";
-    private static final float R = SceneRenderer.R;
+    private static final float PORTAL_R = SceneRenderer.R;
     private static final int REQ_CAMERA = 7;
     private static final long BEAT_MS = 700, WINDOW_BEFORE = 150, WINDOW_AFTER = 600, RESULT_MS = 3200;
 
@@ -470,7 +470,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                     Matrix.multiplyMV(tmp4b, 0, portalInv, 0, tmp4, 0);
                     for (int k = 0; k < 3; k++) myLocal[i * 3 + k] = fresh ? tmp4b[k] : myLocal[i * 3 + k] + (tmp4b[k] - myLocal[i * 3 + k]) * 0.65f;
                     float x = myLocal[i * 3], y = myLocal[i * 3 + 1], z = myLocal[i * 3 + 2];
-                    if (z < -0.01f && Math.hypot(x, y) < R * 0.97f) inside = true;
+                    if (z < -0.01f && Math.hypot(x, y) < PORTAL_R * 0.97f) inside = true;
                 }
                 myHas = true; myLast = now; myInside = inside; myDist = dist;
                 myGesture = HandMath.classify(myLocal);

@@ -57,9 +57,11 @@ jobs:
         working-directory: android
         run: |
           # Maven Central sometimes answers 429 (rate limit) on shared runners: retry with a pause
+          set -o pipefail
           for i in 1 2 3; do
-            gradle assembleRelease --no-daemon --stacktrace && exit 0
-            echo "Build attempt $i failed, retrying in 45s..."; sleep 45
+            gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee /tmp/gradle.log && exit 0
+            grep -q "status code 429" /tmp/gradle.log || exit 1   # real build error: stop
+            echo "Rate-limited (attempt $i), retrying in 45s..."; sleep 45
           done
           exit 1
 
