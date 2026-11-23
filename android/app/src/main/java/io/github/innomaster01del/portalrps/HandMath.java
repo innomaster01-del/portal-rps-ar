@@ -1,0 +1,121 @@
+package io.github.innomaster01del.portalrps;
+
+/**
+ * Pure math, no Android dependencies (unit-testable on a desktop JVM).
+ * Hand points are 21 landmarks packed as float[63] = x0,y0,z0, x1,y1,z1 ...
+ */
+public final class HandMath {
+    private HandMath() {}
+
+    public static final String ROCK = "rock", PAPER = "paper", SCISSORS = "scissors";
+
+    /**
+     * A cartoon hand pose in the SENDER's portal frame (metres): fingers point into the portal (-Z),
+     * palm faces +X, thumb up. yOff moves the whole hand up/down (the "pump" during the countdown).
+     */
+    public static float[] poseHand(String g, float yOff) {
+        int[] ext;
+        if (PAPER.equals(g)) ext = new int[]{1, 1, 1, 1, 1};
+        else if (SCISSORS.equals(g)) ext = new int[]{0, 1, 1, 0, 0};
+        else ext = new int[]{0, 0, 0, 0, 0};
+        final float Z = -0.03f;
+        float[][] P = new float[21][];
+        P[0] = v(0, -0.005f, 0, yOff, Z);
+        P[1] = v(0.012f, 0.02f, -0.03f, yOff, Z);
+        if (ext[0] == 1) {
+            P[2] = v(0.018f, 0.042f, -0.052f, yOff, Z); P[3] = v(0.02f, 0.056f, -0.075f, yOff, Z); P[4] = v(0.02f, 0.064f, -0.097f, yOff, Z);
+        } else {
+            P[2] = v(0.024f, 0.034f, -0.058f, yOff, Z); P[3] = v(0.036f, 0.024f, -0.078f, yOff, Z); P[4] = v(0.044f, 0.012f, -0.09f, yOff, Z);
+        }
+        float[][] mcp = {{0.006f, 0.03f, -0.092f}, {0.004f, 0.01f, -0.097f}, {0.004f, -0.01f, -0.093f}, {0.006f, -0.028f, -0.085f}};
+        float[][] lens = {{0.04f, 0.024f, 0.02f}, {0.045f, 0.027f, 0.022f}, {0.042f, 0.026f, 0.021f}, {0.033f, 0.02f, 0.018f}};
+        float[] spread = SCISSORS.equals(g) ? new float[]{0.2f, -0.14f, 0, 0} : new float[]{0.08f, 0.02f, -0.05f, -0.12f};
+        for (int f = 0; f < 4; f++) {
+            int base = 5 + f * 4;
+            float[] p = v(mcp[f][0], mcp[f][1], mcp[f][2], yOff, Z);
+            P[base] = p;
+            boolean straight = ext[f + 1] == 1;
+            double th = straight ? 0.05 : 1.3, sp = straight ? spread[f] : 0, a = 0;
+            for (int s = 0; s < 3; s++) {
+                a += th;
+                float L = lens[f][s];
+                p = new float[]{(float) (p[0] + L * Math.sin(a)), (float) (p[1] + Math.sin(sp) * L * Math.cos(a)), (float) (p[2] - Math.cos(sp) * L * Math.cos(a))};
+                P[base + 1 + s] = p;
+            }
+        }
+        float[] out = new float[63];
+        for (int i = 0; i < 21; i++) { out[i * 3] = P[i][0]; out[i * 3 + 1] = P[i][1]; out[i * 3 + 2] = P[i][2]; }
+        return out;
+    }
+
+    private static float[] v(float x, float y, float z, float yOff, float zOff) { return new float[]{x, y + yOff, z + zOff}; }
+
+    private static float dist(float[] p, int a, int b) {
+        float dx = p[a * 3] - p[b * 3], dy = p[a * 3 + 1] - p[b * 3 + 1], dz = p[a * 3 + 2] - p[b * 3 + 2];
+        return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /** Rock / paper / scissors from 21 3D points (any frame, any scale). null when unclear. */
+    public static String classify(float[] p) {
+        float palm = Math.max(dist(p, 0, 9), 1e-6f);
+        boolean[] ext = new boolean[4];
+        int n = 0;
+        int[] tips = {8, 12, 16, 20};
+        for (int i = 0; i < 4; i++) {
+            int tip = tips[i];
+            ext[i] = dist(p, tip, 0) > dist(p, tip - 2, 0) * 1.12f && dist(p, tip, 0) > palm * 1.45f;
+            if (ext[i]) n++;
+        }
+        if (ext[0] && ext[1] && !ext[2] && !ext[3]) return SCISSORS;
+        if (n >= 4 || (n == 3 && ext[2])) return PAPER;
+        if (n == 0) return ROCK;
+        return null;
+    }
+
+    /**
+     * Places MediaPipe's metric hand (world landmarks: origin ≈ hand centre, x right, y down, z forward
+     * in the same image axes) by solving only for its translation, so that it projects onto the 2D
+     * landmarks. nx/ny are normalised camera rays: (u - cx) / fx, (v - cy) / fy.
+     * Returns t = {tx, ty, tz} in that image-camera frame (z forward), or null.
+     */
+    public static double[] solveTranslation(float[] nx, float[] ny, float[] w) {
+        double a00 = 0, a01 = 0, a02 = 0, a11 = 0, a12 = 0, a22 = 0, b0 = 0, b1 = 0, b2 = 0;
+        for (int i = 0; i < 21; i++) {
+            double wx = w[i * 3], wy = w[i * 3 + 1], wz = w[i * 3 + 2];
+            // row (1, 0, -nx) · t = nx*wz - wx
+            double c = -nx[i], b = nx[i] * wz - wx;
+            a00 += 1; a02 += c; a22 += c * c; b0 += b; b2 += c * b;
+            // row (0, 1, -ny) · t = ny*wz - wy
+            c = -ny[i]; b = ny[i] * wz - wy;
+            a11 += 1; a12 += c; a22 += c * c; b1 += b; b2 += c * b;
+        }
+        double[][] A = {{a00, a01, a02}, {a01, a11, a12}, {a02, a12, a22}};
+        double det = det3(A);
+        if (Math.abs(det) < 1e-12) return null;
+        double[] t = new double[3];
+        double[] B = {b0, b1, b2};
+        for (int k = 0; k < 3; k++) {
+            double[][] M = {A[0].clone(), A[1].clone(), A[2].clone()};
+            for (int r = 0; r < 3; r++) M[r][k] = B[r];
+            t[k] = det3(M) / det;
+        }
+        if (!(t[2] > 0.06 && t[2] < 3.0)) return null;
+        return t;
+    }
+
+    private static double det3(double[][] m) {
+        return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+             - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    }
+
+    /** From a's point of view: 1 win, -1 loss, 0 draw, 2 nobody played. null = no hand. */
+    public static int rps(String a, String b) {
+        if (a == null && b == null) return 2;
+        if (b == null) return 1;
+        if (a == null) return -1;
+        if (a.equals(b)) return 0;
+        boolean aWins = (ROCK.equals(a) && SCISSORS.equals(b)) || (SCISSORS.equals(a) && PAPER.equals(b)) || (PAPER.equals(a) && ROCK.equals(b));
+        return aWins ? 1 : -1;
+    }
+}

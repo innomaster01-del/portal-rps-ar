@@ -1,8 +1,0 @@
-[{
-  "relation": ["delegate_permission/common.handle_all_urls"],
-  "target": {
-    "namespace": "android_app",
-    "package_name": "io.github.innomaster01del.portalrps",
-    "sha256_cert_fingerprints": ["9A:E5:AC:65:3A:B5:E7:D2:F6:4A:FB:19:09:1D:B9:6F:D0:1E:27:A9:A4:DB:84:D4:5A:FA:83:B6:BB:A1:81:83"]
-  }
-}]

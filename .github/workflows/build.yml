@@ -1,4 +1,4 @@
-name: Build APK and publish web app
+name: Build APK
 
 on:
   push:
@@ -7,29 +7,12 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  web:
-    name: Publish web app (GitHub Pages)
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web
-      - id: deploy
-        uses: actions/deploy-pages@v4
-
   android:
     name: Build signed APK
     runs-on: ubuntu-latest
@@ -52,6 +35,12 @@ jobs:
         with:
           gradle-version: '8.14.3'
 
+      - name: Download hand-tracking model (MediaPipe)
+        run: |
+          curl -fsSL --retry 3 -o android/app/src/main/assets/hand_landmarker.task \
+            https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+          ls -l android/app/src/main/assets/
+
       - name: Signing key
         run: |
           if [ -n "$KS_B64" ]; then
@@ -68,45 +57,27 @@ jobs:
         working-directory: android
         run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Collect APK and key fingerprint
+      - name: Collect APK
         id: out
         run: |
-          NAME="PortalRPS-v1.0.${VERSION_CODE}.apk"
+          NAME="PortalRPS-v2.0.${VERSION_CODE}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$NAME"
           echo "apk=$NAME" >> "$GITHUB_OUTPUT"
-          SHA=$(keytool -list -v -keystore "$KEYSTORE_PATH" -alias "$KEY_ALIAS" -storepass "$KEYSTORE_PASSWORD" | grep -m1 "SHA256:" | sed 's/.*SHA256: //')
-          cat > assetlinks.json <<EOF
-          [{
-            "relation": ["delegate_permission/common.handle_all_urls"],
-            "target": {
-              "namespace": "android_app",
-              "package_name": "io.github.innomaster01del.portalrps",
-              "sha256_cert_fingerprints": ["$SHA"]
-            }
-          }]
-          EOF
-          {
-            echo "## APK: $NAME"
-            echo "Signing key SHA-256: \`$SHA\`"
-            echo
-            echo "assetlinks.json (for https://innomaster01-del.github.io/.well-known/assetlinks.json):"
-            echo '```json'; cat assetlinks.json; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "## APK: $NAME ($(du -h "$NAME" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
           name: apk
-          path: |
-            ${{ steps.out.outputs.apk }}
-            assetlinks.json
+          path: ${{ steps.out.outputs.apk }}
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: פורטל אבן נייר v1.0.${{ github.run_number }}
+          tag_name: v2.0.${{ github.run_number }}
+          name: פורטל אבן נייר v2.0.${{ github.run_number }}
           body: |
-            להתקנה: הורידו את קובץ ה-APK בטלפון אנדרואיד ופתחו אותו.
-            צריך Google Chrome מעודכן ומכשיר שתומך ב-ARCore.
+            אפליקציית אנדרואיד נייטיב (ARCore + זיהוי יד במכשיר).
+            להתקנה: מורידים את קובץ ה-APK בטלפון ופותחים אותו.
+            צריך טלפון שתומך ב-ARCore. בפעם הראשונה הטלפון אולי יבקש להתקין את Google Play Services for AR.
           files: ${{ steps.out.outputs.apk }}
           make_latest: true
