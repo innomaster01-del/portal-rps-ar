@@ -55,7 +55,13 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          # Maven Central sometimes answers 429 (rate limit) on shared runners: retry with a pause
+          for i in 1 2 3; do
+            gradle assembleRelease --no-daemon --stacktrace && exit 0
+            echo "Build attempt $i failed, retrying in 45s..."; sleep 45
+          done
+          exit 1
 
       - name: Collect APK
         id: out
