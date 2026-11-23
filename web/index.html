@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1512">
+<title>פורטל אבן נייר ומספריים</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<!--
+  Hand Portal — prototype for Android Chrome (ARCore).
+  Each phone places a small AR portal. The phone's camera tracks your hand (MediaPipe);
+  when the hand passes through YOUR portal, a cartoon hand comes out of your FRIEND's portal.
+  Needs HTTPS. Sync is peer-to-peer (PeerJS / WebRTC).
+-->
+<style>
+  [hidden] { display: none !important; }
+  :root {
+    --bg: #0d1512; --panel: rgba(14, 22, 19, 0.86); --fg: #eef7f1; --muted: #a9bdb2;
+    --accent: #4dff9a; --accent-fg: #062413; --warn: #ffcf5a; --line: rgba(255,255,255,.12);
+    color-scheme: dark;
+  }
+  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--fg);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #overlay { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; gap: 10px;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 14px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  #overlay > * { pointer-events: auto; }
+  #top { display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+  #top > * { pointer-events: auto; }
+  #status { max-width: 34rem; background: var(--panel); border-radius: 12px; padding: 9px 14px; text-align: center; font-size: 15px; }
+  #status:empty { display: none; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; font-size: 13px; color: var(--muted); }
+  .chip.on { color: var(--accent); border-color: rgba(77,255,154,.45); }
+  .chip.hot { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); font-weight: 700; }
+  #lobby { margin: auto 0; align-self: center; width: min(26rem, 100%); box-sizing: border-box; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 18px; padding: 18px 18px 16px; display: flex; flex-direction: column; gap: 12px; }
+  #lobby h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
+  #lobby p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > input[type=text] { flex: 1; min-width: 0; min-height: 46px; border-radius: 12px; border: 1px solid var(--line); background: rgba(0,0,0,.35);
+    color: var(--fg); font: inherit; font-size: 20px; letter-spacing: 6px; text-align: center; direction: ltr; }
+  button { min-height: 46px; padding: 0 18px; border: 0; border-radius: 999px; font: inherit; font-weight: 650;
+    background: rgba(255,255,255,.1); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-fg); }
+  button:disabled { opacity: .45; }
+  button:focus-visible, input:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+  .wide { width: 100%; }
+  label.check { font-size: 14.5px; color: var(--muted); gap: 10px; }
+  label.check input { width: 20px; height: 20px; accent-color: var(--accent); }
+  #roomInfo { text-align: center; background: rgba(77,255,154,.08); border: 1px dashed rgba(77,255,154,.4); border-radius: 12px; padding: 10px; }
+  #roomCode { font-size: 30px; letter-spacing: 8px; direction: ltr; display: block; color: var(--accent); }
+  .or { text-align: center; color: var(--muted); font-size: 13px; }
+  .bar { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: auto; }
+  .bar button { background: var(--panel); }
+  .bar button.primary { background: var(--accent); }
+  #stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; pointer-events: none; text-align: center; }
+  #banner { background: var(--panel); border-radius: 22px; padding: 14px 26px; max-width: 30rem; }
+  #banner b { display: block; font-size: 40px; line-height: 1.15; }
+  #banner span { display: block; font-size: 18px; color: var(--muted); margin-top: 4px; }
+  #banner.pop { animation: pop .28s cubic-bezier(.2,.9,.3,1.3); }
+  #banner.win b { color: var(--accent); }
+  #banner.lose b { color: #ff8a7a; }
+  @keyframes pop { from { transform: scale(.7); opacity: .3; } to { transform: scale(1); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { #banner.pop { animation: none; } }
+  #hint { background: var(--panel); border-radius: 999px; padding: 6px 14px; font-size: 14.5px; color: var(--muted); }
+  #hint:empty { display: none; }
+  #manualBar { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  #manualBar button { background: var(--panel); font-size: 17px; min-width: 64px; }
+  #manualBar button.sel { background: var(--accent); color: var(--accent-fg); }
+  #manualBar button.in { outline: 2px solid var(--accent); }
+  #dbg { position: fixed; left: 10px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); width: 96px; border: 1px solid var(--line); border-radius: 8px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+  }
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+<div id="overlay">
+  <div id="top">
+    <div id="status" role="status" aria-live="polite"></div>
+    <div class="chips">
+      <span id="netChip" class="chip">לא מחובר</span>
+      <span id="mpChip" class="chip">טוען זיהוי יד…</span>
+      <span id="handChip" class="chip" hidden></span>
+      <span id="scoreChip" class="chip on" hidden></span>
+    </div>
+  </div>
+
+  <div id="stage">
+    <div id="banner" hidden><b></b><span></span></div>
+    <div id="hint"></div>
+  </div>
+
+  <div id="lobby">
+    <h1>אבן נייר ומספריים דרך פורטל 🌀</h1>
+    <p>כל אחד מציב פורטל קטן על השולחן ומכניס אליו יד. כל אחד רואה את היד של היריב יוצאת מהפורטל שלו, והטלפון קובע מי ניצח.</p>
+    <button id="createBtn" class="primary wide">צור חדר</button>
+    <div id="roomInfo" hidden>
+      קוד החדר
+      <b id="roomCode"></b>
+      <button id="shareBtn" class="wide" style="margin-top:8px">שלח לחבר</button>
+    </div>
+    <div class="or">או</div>
+    <div class="row">
+      <input id="codeIn" type="text" inputmode="numeric" maxlength="4" placeholder="קוד" aria-label="קוד חדר">
+      <button id="joinBtn">הצטרף</button>
+    </div>
+    <label class="row check"><input type="checkbox" id="soloChk"> שחק נגד המחשב (בלי חבר)</label>
+    <label class="row check"><input type="checkbox" id="dbgChk"> הצג מה המצלמה מזהה</label>
+    <button id="lobbyClose" class="wide">סגור</button>
+  </div>
+
+  <div id="manualBar" hidden>
+    <button id="mIn">✋ הכנס יד</button>
+    <button data-g="rock" aria-label="אבן">🪨</button>
+    <button data-g="paper" aria-label="נייר">📄</button>
+    <button data-g="scissors" aria-label="מספריים">✂️</button>
+  </div>
+
+  <div class="bar" id="bar">
+    <button id="lobbyOpen" hidden>⚙️ חדר</button>
+    <button id="startAR" class="primary" hidden>הפעל AR</button>
+    <button id="moveBtn" hidden>הזז פורטל</button>
+    <button id="exitAR" hidden>יציאה</button>
+  </div>
+  <canvas id="dbg" hidden></canvas>
+</div>
+
+<script>
+  setTimeout(function () {
+    if (window.__portalApp) return;
+    var s = document.getElementById('status');
+    if (s) s.textContent = 'הטעינה נכשלה. בדוק את החיבור לאינטרנט ורענן את הדף.';
+    document.documentElement.dataset.bootFailed = '1';
+  }, 12000);
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+
+/* ===================== configuration ===================== */
+const CONFIG = {
+  portalRadius: 0.14,        // m — 28 cm ring, fits a hand up to the forearm
+  maxFloorTilt: 0.8,         // hit normal.y threshold (floors/tables only)
+  procWidth: 320,            // px width of the camera frame given to the hand tracker
+  detectIntervalMs: 40,      // ≈25 detections/s max
+  flipCameraY: true,         // camera texture rows come bottom-up; flip to upright for MediaPipe
+  roomPrefix: 'handportal-v1-',
+  mpBases: [                 // MediaPipe runtime (JS + wasm), tried in order
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.33',
+    'https://unpkg.com/@mediapipe/tasks-vision@0.10.33',
+  ],
+  handModelUrls: [           // hand model (~7.5 MB), tried in order
+    'hand_landmarker.task',  // optional copy next to index.html
+    'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+    'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task',
+  ],
+};
+const TEXT = {
+  insecure: 'AR דורש HTTPS. פתח את הדף בכתובת https://',
+  noXR: 'הדפדפן לא תומך ב-AR. צריך Chrome באנדרואיד עם ARCore.',
+  unsupported: 'המכשיר הזה לא תומך ב-AR (ARCore). אפשר עדיין לראות את הפורטל בתלת-ממד.',
+  blocked: 'הגישה ל-AR נחסמה. פתח את הדף ישירות ולא בתוך אפליקציה אחרת.',
+  failed: 'לא הצלחנו להפעיל AR. בדוק הרשאת מצלמה ונסה שוב.',
+  scan: 'הזז את הטלפון לאט מעל השולחן או הרצפה',
+  tap: 'הקש על המסך כדי להציב את הפורטל',
+  placed: 'החזק את הטלפון ביד אחת והכנס את היד השנייה לפורטל',
+  noCam: 'הטלפון לא נותן גישה למצלמה בתוך AR, אז אי אפשר לזהות את היד שלך. היד של החבר עדיין תופיע אצלך.',
+};
+/* ========================================================== */
+
+const R = CONFIG.portalRadius;
+const $ = (id) => document.getElementById(id);
+const overlay = $('overlay'), statusEl = $('status'), lobby = $('lobby');
+const startBtn = $('startAR'), moveBtn = $('moveBtn'), exitBtn = $('exitAR');
+const netChip = $('netChip'), mpChip = $('mpChip'), handChip = $('handChip');
+const setStatus = (t) => { statusEl.textContent = t || ''; };
+for (const el of [lobby, $('bar')]) el.addEventListener('beforexrselect', (e) => e.preventDefault());
+
+/* ---------------- renderer / scene ---------------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.domElement.id = 'gl';
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+renderer.localClippingEnabled = true;
+renderer.xr.enabled = true;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const previewBg = new THREE.Color('#16211c');
+scene.background = previewBg;
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 50);
+camera.position.set(0.32, 0.36, 0.72);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(0.25, 0.8, 0.45);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -0.45, right: 0.45, top: 0.45, bottom: -0.45, near: 0.01, far: 2.5 });
+scene.add(sun);
+
+const anchor = new THREE.Group();          // floor point under the portal
+scene.add(anchor);
+sun.target = anchor;
+
+/* ---------------- the portal ---------------- */
+const noRay = (o) => { o.traverse((m) => { m.raycast = () => {}; }); return o; };
+const portal = new THREE.Group();          // origin = ring centre, +Z faces the viewer
+portal.position.y = R + 0.04;
+anchor.add(portal);
+
+const metal = new THREE.MeshStandardMaterial({ color: 0x9aa3a8, metalness: 0.85, roughness: 0.3 });
+const glow = new THREE.MeshStandardMaterial({ color: 0x1aff7a, emissive: 0x1aff7a, emissiveIntensity: 1.4, toneMapped: false });
+const ring = new THREE.Mesh(new THREE.TorusGeometry(R, 0.017, 18, 80), metal);
+const ringGlow = new THREE.Mesh(new THREE.TorusGeometry(R - 0.013, 0.0055, 10, 80), glow);
+ring.castShadow = true;
+const swirlMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: { value: 0 }, uActive: { value: 0 } },
+  side: THREE.DoubleSide,
+  toneMapped: false,
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `
+    varying vec2 vUv; uniform float uTime; uniform float uActive;
+    void main(){
+      vec2 p = vUv * 2.0 - 1.0; float r = length(p); float a = atan(p.y, p.x);
+      float s = sin(a * 5.0 + r * 15.0 - uTime * 4.0) * 0.5 + 0.5;
+      float s2 = sin(a * 3.0 - r * 9.0 + uTime * 2.3) * 0.5 + 0.5;
+      vec3 deep = vec3(0.01, 0.12, 0.07), lit = vec3(0.35, 1.0, 0.6);
+      vec3 c = mix(deep, lit, s * s2 * (1.0 - r * 0.7));
+      c += vec3(0.1, 0.5, 0.3) * pow(1.0 - r, 2.0) * (0.5 + uActive);
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+const disc = new THREE.Mesh(new THREE.CircleGeometry(R - 0.006, 72), swirlMat);
+const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.016, 0.03, 16), metal);
+neck.position.y = -R - 0.017;
+const base = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.014, 0.075), metal);
+base.position.y = -R - 0.033;
+for (const m of [neck, base]) m.castShadow = true;
+portal.add(noRay(ring), noRay(ringGlow), noRay(disc), noRay(neck), noRay(base));
+
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), new THREE.ShadowMaterial({ opacity: 0.3 }));
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.receiveShadow = true;
+anchor.add(noRay(shadowCatcher));
+
+// World-space clip plane = the portal's face. Keeps only what is on the viewer's side.
+const clipPlane = new THREE.Plane();
+function updateClipPlane() {
+  portal.updateWorldMatrix(true, false);
+  const n = new THREE.Vector3(0, 0, 1).transformDirection(portal.matrixWorld);
+  const p = new THREE.Vector3().setFromMatrixPosition(portal.matrixWorld);
+  clipPlane.setFromNormalAndCoplanarPoint(n, p);
+}
+
+/* ---------------- cartoon hand built from 21 landmarks ---------------- */
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const JOINT_R = [0.021, 0.015, 0.0125, 0.011, 0.0095, 0.0115, 0.0105, 0.0095, 0.0085,
+  0.012, 0.011, 0.0098, 0.0088, 0.0112, 0.0102, 0.0092, 0.0084, 0.0102, 0.0092, 0.0084, 0.0078];
+const UP = new THREE.Vector3(0, 1, 0);
+const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
+const tubeGeo = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true);
+
+class HandAvatar {
+  constructor({ skin, cuff = null, inflate = 1, renderOrder = 0 }) {
+    this.group = new THREE.Group();
+    this.inflate = inflate;
+    const add = (geo, mat) => { const m = new THREE.Mesh(geo, mat); m.castShadow = !!cuff; m.frustumCulled = false;
+      m.renderOrder = renderOrder; m.raycast = () => {}; this.group.add(m); return m; };
+    this.skin = skin;
+    this.joints = JOINT_R.map((r) => { const m = add(sphereGeo, skin); m.scale.setScalar(r * inflate); return m; });
+    this.bones = HAND_LINKS.map(([a, b]) => ({ a, b, r: Math.min(JOINT_R[a], JOINT_R[b]) * inflate, m: add(tubeGeo, skin) }));
+    this.palm = add(new THREE.BufferGeometry(), skin);
+    this.cuff = cuff ? add(new THREE.CylinderGeometry(1, 1.08, 1, 24, 1), cuff) : null;
+    this.group.visible = false;
+    this._v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  }
+  update(p) {
+    const [d, n, t, u] = this._v;
+    for (let i = 0; i < 21; i++) this.joints[i].position.copy(p[i]);
+    for (const bn of this.bones) {
+      d.subVectors(p[bn.b], p[bn.a]);
+      const len = d.length();
+      if (len < 1e-5) { bn.m.visible = false; continue; }
+      bn.m.visible = true;
+      bn.m.position.addVectors(p[bn.a], p[bn.b]).multiplyScalar(0.5);
+      bn.m.quaternion.setFromUnitVectors(UP, d.divideScalar(len));
+      bn.m.scale.set(bn.r, len, bn.r);
+    }
+    // palm: convex slab through wrist, thumb base and the four knuckles
+    t.subVectors(p[5], p[0]); u.subVectors(p[17], p[0]);
+    n.crossVectors(t, u).normalize().multiplyScalar(0.0115 * this.inflate);
+    const pts = [];
+    for (const i of [0, 1, 2, 5, 9, 13, 17]) { pts.push(p[i].clone().add(n), p[i].clone().sub(n)); }
+    try { const g = new ConvexGeometry(pts); this.palm.geometry.dispose(); this.palm.geometry = g; } catch { /* degenerate frame */ }
+    if (this.cuff) {
+      d.subVectors(p[9], p[0]).normalize();
+      this.cuff.position.copy(p[0]).addScaledVector(d, -0.03);
+      this.cuff.quaternion.setFromUnitVectors(UP, d);
+      this.cuff.scale.set(0.033 * this.inflate, 0.045, 0.033 * this.inflate);
+    }
+  }
+}
+
+// Friend's hand (visible, clipped at the portal face so it "comes out" of it).
+const skinMat = new THREE.MeshStandardMaterial({ color: 0xf4c3a0, roughness: 0.55, metalness: 0, clippingPlanes: [clipPlane] });
+const cuffMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, clippingPlanes: [clipPlane] });
+const remoteHand = new HandAvatar({ skin: skinMat, cuff: cuffMat });
+portal.add(remoteHand.group);
+
+// My own hand, invisible: writes depth only, so the swirl disc does not cover the part of my
+// real hand that is still in front of the portal, but does cover the part that went "through".
+const occMat = new THREE.MeshBasicMaterial({ colorWrite: false, clippingPlanes: [clipPlane] });
+const myHandOccluder = new HandAvatar({ skin: occMat, inflate: 1.5, renderOrder: -10 });
+portal.add(myHandOccluder.group);
+
+/* ---------------- remote hand state ---------------- */
+const remote = { target: Array.from({ length: 21 }, () => new THREE.Vector3()),
+  cur: Array.from({ length: 21 }, () => new THREE.Vector3()), last: 0, shown: false };
+function onRemoteHand(pack) {
+  if (!pack) { remote.last = 0; return; }
+  // sender's portal space → mine: turn 180° around the vertical axis, so "into theirs" = "out of mine"
+  for (let i = 0; i < 21; i++) remote.target[i].set(-pack[i * 3] / 1000, pack[i * 3 + 1] / 1000, -pack[i * 3 + 2] / 1000);
+  if (!remote.shown) {
+    for (let i = 0; i < 21; i++) remote.cur[i].copy(remote.target[i]);
+    remote.shown = true;
+    navigator.vibrate?.(30);
+  }
+  remote.last = performance.now();
+}
+function stepRemote(dt, now) {
+  if (remote.shown && now - remote.last > 450) remote.shown = false;
+  remoteHand.group.visible = remote.shown;
+  if (!remote.shown) return;
+  const k = 1 - Math.exp(-dt * 18);
+  for (let i = 0; i < 21; i++) remote.cur[i].lerp(remote.target[i], k);
+  remoteHand.update(remote.cur);
+}
+
+/* ---------------- networking (PeerJS / WebRTC) ---------------- */
+let peer = null, conn = null, isHost = false, netState = 'none';
+const soloChk = $('soloChk');
+function setNet(state, label) {
+  netState = state;
+  netChip.textContent = label;
+  netChip.className = 'chip' + (state === 'connected' ? ' on' : '');
+  updateStartButton();
+}
+function resetPeer() { try { conn?.close(); } catch {} try { peer?.destroy(); } catch {} conn = null; peer = null; }
+function wireConn(c) {
+  conn = c;
+  c.on('open', () => { setNet('connected', '🟢 מחובר לחבר'); setStatus(''); resetGame(); navigator.vibrate?.([20, 40, 20]); });
+  c.on('data', (d) => {
+    if (!d || soloChk.checked) return;
+    if (d.t === 'h') onRemoteHand(d.p); else onGameMsg(d, performance.now());
+  });
+  c.on('close', () => { if (conn === c) conn = null; onRemoteHand(null); resetGame();
+    setNet(isHost ? 'waiting' : 'none', isHost ? '⏳ החבר התנתק, מחכה…' : 'החיבור נסגר'); });
+  c.on('error', (e) => console.warn('conn error', e));
+}
+function newPeer(id) {
+  if (!window.Peer) { setStatus('ספריית החיבור לא נטענה. רענן את הדף.'); return null; }
+  const p = id ? new window.Peer(id, { debug: 1 }) : new window.Peer({ debug: 1 });
+  p.on('disconnected', () => { if (!p.destroyed) p.reconnect(); });
+  return p;
+}
+function randomCode() { return String(Math.floor(1000 + Math.random() * 9000)); }
+
+function createRoom(tries = 0) {
+  resetPeer(); isHost = true;
+  const code = randomCode();
+  peer = newPeer(CONFIG.roomPrefix + code);
+  if (!peer) return;
+  setNet('connecting', '⏳ יוצר חדר…');
+  peer.on('open', () => {
+    $('roomCode').textContent = code; $('roomInfo').hidden = false;
+    setNet('waiting', '⏳ מחכה לחבר · ' + code);
+  });
+  peer.on('connection', (c) => { if (conn) conn.close(); wireConn(c); });
+  peer.on('error', (e) => {
+    if (e.type === 'unavailable-id' && tries < 4) return createRoom(tries + 1);
+    console.warn(e); setNet('none', 'שגיאת חיבור'); setStatus('לא הצלחנו ליצור חדר (' + e.type + '). בדוק אינטרנט ונסה שוב.');
+  });
+}
+function joinRoom(code) {
+  code = (code || '').replace(/\D/g, '');
+  if (code.length !== 4) { setStatus('הקלד קוד בן 4 ספרות'); return; }
+  resetPeer(); isHost = false; $('roomInfo').hidden = true;
+  peer = newPeer();
+  if (!peer) return;
+  setNet('connecting', '⏳ מתחבר לחדר ' + code + '…');
+  peer.on('open', () => wireConn(peer.connect(CONFIG.roomPrefix + code, { serialization: 'json' })));
+  peer.on('error', (e) => {
+    console.warn(e);
+    setNet('none', 'לא מחובר');
+    setStatus(e.type === 'peer-unavailable' ? 'לא נמצא חדר עם הקוד ' + code + '. ודא שהחבר לחץ "צור חדר".' : 'שגיאת חיבור (' + e.type + ').');
+  });
+}
+$('createBtn').addEventListener('click', () => createRoom());
+$('joinBtn').addEventListener('click', () => joinRoom($('codeIn').value));
+$('shareBtn').addEventListener('click', async () => {
+  const code = $('roomCode').textContent;
+  const url = location.origin + location.pathname + '?join=' + code;
+  const text = 'בוא נחבר פורטלים! קוד: ' + code;
+  try {
+    if (navigator.share) await navigator.share({ title: 'פורטל יד', text, url });
+    else { await navigator.clipboard.writeText(url); setStatus('הקישור הועתק'); }
+  } catch { /* user cancelled */ }
+});
+soloChk.addEventListener('change', () => { onRemoteHand(null); remote.shown = false; resetGame(); updateStartButton(); });
+let lastSend = 0, sentInside = false;
+function sendHand(pack) {
+  if (soloChk.checked || !conn || !conn.open) return;   // vs computer: my hand goes nowhere
+  try { conn.send({ t: 'h', p: pack }); } catch (e) { console.warn(e); }
+}
+function netSend(msg) { if (!soloChk.checked && conn?.open) try { conn.send(msg); } catch (e) { console.warn(e); } }
+
+// GESTURE-START
+// Builds a cartoon hand pose (21 landmarks) in the SENDER's portal frame: fingers point into the
+// portal (-Z), palm faces +X, thumb up. Returned as the same mm-int pack the network sends.
+function poseHand(g, yOff = 0) {
+  const ext = { rock: [0, 0, 0, 0, 0], paper: [1, 1, 1, 1, 1], scissors: [0, 1, 1, 0, 0] }[g] || [0, 0, 0, 0, 0];
+  const Z = -0.03;                           // wrist slightly past the portal face
+  const P = new Array(21);
+  const v = (x, y, z) => [x, y + yOff, z + Z];
+  P[0] = v(0, -0.005, 0);
+  P[1] = v(0.012, 0.02, -0.03);
+  if (ext[0]) { P[2] = v(0.018, 0.042, -0.052); P[3] = v(0.02, 0.056, -0.075); P[4] = v(0.02, 0.064, -0.097); }
+  else { P[2] = v(0.024, 0.034, -0.058); P[3] = v(0.036, 0.024, -0.078); P[4] = v(0.044, 0.012, -0.09); }
+  const mcp = [[0.006, 0.03, -0.092], [0.004, 0.01, -0.097], [0.004, -0.01, -0.093], [0.006, -0.028, -0.085]];
+  const lens = [[0.04, 0.024, 0.02], [0.045, 0.027, 0.022], [0.042, 0.026, 0.021], [0.033, 0.02, 0.018]];
+  const spread = g === 'scissors' ? [0.2, -0.14, 0, 0] : [0.08, 0.02, -0.05, -0.12];
+  for (let f = 0; f < 4; f++) {
+    const base = 5 + f * 4;
+    let p = v(...mcp[f]);
+    P[base] = p;
+    const th = ext[f + 1] ? 0.05 : 1.3, sp = ext[f + 1] ? spread[f] : 0;
+    let a = 0;
+    for (let s = 0; s < 3; s++) {
+      a += th;
+      const L = lens[f][s];
+      p = [p[0] + L * Math.sin(a), p[1] + Math.sin(sp) * L * Math.cos(a), p[2] - Math.cos(sp) * L * Math.cos(a)];
+      P[base + 1 + s] = p;
+    }
+  }
+  const pack = new Array(63);
+  for (let i = 0; i < 21; i++) for (let k = 0; k < 3; k++) pack[i * 3 + k] = Math.round(P[i][k] * 1000);
+  return pack;
+}
+// Reads rock / paper / scissors from 21 3D points (any frame, any units). Returns null if unclear.
+function classifyGesture(p) {
+  const d = (a, b) => Math.hypot(p[a].x - p[b].x, p[a].y - p[b].y, p[a].z - p[b].z);
+  const palm = d(0, 9) || 1e-6;
+  // a finger is straight when its tip is clearly farther from the wrist than its middle joint
+  const ext = [8, 12, 16, 20].map((tip) => d(tip, 0) > d(tip - 2, 0) * 1.12 && d(tip, 0) > palm * 1.45);
+  const n = ext.filter(Boolean).length;
+  if (ext[0] && ext[1] && !ext[2] && !ext[3]) return 'scissors';
+  if (n >= 4 || (n === 3 && ext[2])) return 'paper';
+  if (n === 0) return 'rock';
+  return null;
+}
+// GESTURE-END
+
+/* ---------------- game: rock paper scissors ---------------- */
+const NAME = { rock: 'אבן 🪨', paper: 'נייר 📄', scissors: 'מספריים ✂️' };
+const EMO = { rock: '🪨', paper: '📄', scissors: '✂️' };
+const BEATS = { rock: 'scissors', scissors: 'paper', paper: 'rock' };
+const WHY = { rock: 'אבן שוברת מספריים', scissors: 'מספריים גוזרים נייר', paper: 'נייר עוטף אבן' };
+const BEAT_MS = 700, WINDOW_BEFORE = 150, WINDOW_AFTER = 600, RESULT_MS = 3200;
+const game = { phase: 'idle', id: 0, countStart: 0, shootAt: 0, votes: {}, myThrow: undefined, oppThrow: undefined,
+  waitUntil: 0, resultUntil: 0, cooldownUntil: 0, bothSince: 0, score: [0, 0], beatShown: -1 };
+const bot = { gesture: 'rock' };
+const manual = { inside: false, gesture: 'rock' };
+const banner = $('banner'), hint = $('hint'), scoreChip = $('scoreChip'), manualBar = $('manualBar');
+const isReferee = () => soloChk.checked || isHost;          // the room creator (or this phone vs computer) judges
+const opponentPresent = () => soloChk.checked || !!(conn && conn.open);
+
+function showBanner(title, sub = '', cls = '') {
+  banner.querySelector('b').textContent = title;
+  banner.querySelector('span').textContent = sub;
+  banner.className = cls;
+  banner.hidden = false;
+  void banner.offsetWidth; banner.classList.add('pop');
+}
+function hideBanner() { banner.hidden = true; }
+function updateScore() {
+  scoreChip.hidden = !opponentPresent();
+  scoreChip.textContent = 'אתה ' + game.score[0] + ' : ' + game.score[1] + (soloChk.checked ? ' מחשב' : ' יריב');
+}
+function resetGame() {
+  Object.assign(game, { phase: 'idle', votes: {}, myThrow: undefined, oppThrow: undefined, bothSince: 0, score: [0, 0], beatShown: -1 });
+  hideBanner(); updateScore();
+}
+// From a's point of view: 1 win, -1 loss, 0 draw, null nobody played.
+function rpsWinner(a, b) {
+  if (!a && !b) return null;
+  if (!b) return 1;
+  if (!a) return -1;
+  if (a === b) return 0;
+  return BEATS[a] === b ? 1 : -1;
+}
+function majority(votes) { let best = null, n = 0; for (const k in votes) if (votes[k] > n) { n = votes[k]; best = k; } return best; }
+
+function beginCount(id, now) {
+  Object.assign(game, { phase: 'count', id, countStart: now, shootAt: now + BEAT_MS * 3, votes: {},
+    myThrow: undefined, oppThrow: undefined, beatShown: -1 });
+  bot.gesture = ['rock', 'paper', 'scissors'][Math.floor(Math.random() * 3)];
+}
+function onGameMsg(d, now) {
+  if (d.t === 'go' && !isHost) beginCount(d.id, now);
+  else if (d.t === 'throw' && isHost && d.id === game.id) game.oppThrow = d.g || null;
+  else if (d.t === 'result' && !isHost) {
+    game.score = [d.score[1], d.score[0]];
+    showResult(d.g || null, d.h || null, now);      // guest: "mine" is the guest throw
+  }
+}
+function showResult(mine, theirs, now) {
+  const w = rpsWinner(mine, theirs);
+  game.phase = 'result'; game.resultUntil = now + RESULT_MS;
+  let title, sub = '';
+  if (w === null) title = 'אף אחד לא שלח יד';
+  else if (!theirs) { title = 'ניצחת! 🎉'; sub = 'היריב לא הראה יד בזמן'; }
+  else if (!mine) { title = 'הפסדת 😅'; sub = 'לא זיהינו את היד שלך בזמן'; }
+  else if (w === 0) { title = 'תיקו!'; sub = EMO[mine] + ' מול ' + EMO[theirs]; }
+  else if (w === 1) { title = 'ניצחת! 🎉'; sub = EMO[mine] + ' ' + WHY[mine]; }
+  else { title = 'הפסדת 😅'; sub = EMO[theirs] + ' ' + WHY[theirs]; }
+  showBanner(title, sub, w === 1 ? 'win' : w === -1 ? 'lose' : '');
+  navigator.vibrate?.(w === 1 ? [40, 60, 40, 60, 90] : 70);
+  updateScore();
+}
+function resolveRound(now) {
+  const h = game.myThrow ?? null, g = game.oppThrow ?? null;
+  const w = rpsWinner(h, g);
+  if (w === 1) game.score[0]++; else if (w === -1) game.score[1]++;
+  netSend({ t: 'result', id: game.id, h, g, score: game.score });
+  showResult(h, g, now);
+}
+
+const portalReady = () => mode === 'placed' || mode === 'preview';
+const manualActive = () => !renderer.xr.isPresenting || !camAccess || mpState !== 'ready';
+function myInsideNow(now) { return manualActive() ? manual.inside : (myHand.inside && now - myHand.last < 300); }
+function myGestureNow(now) { return manualActive() ? manual.gesture : myHand.gesture; }
+function pumpY(now) {
+  if (game.phase !== 'count') return 0.004 * Math.sin(now / 380);
+  const ph = ((now - game.countStart) % BEAT_MS) / BEAT_MS;
+  return 0.04 * Math.sin(Math.PI * ph);                     // up and back down on every beat
+}
+// What a procedural hand (computer, or me with buttons) shows right now.
+function shownGesture(g) { return (game.phase === 'idle' || game.phase === 'count') ? 'rock' : g; }
+
+function stepGame(now) {
+  const ready = portalReady();
+  const meIn = ready && myInsideNow(now);
+  const oppIn = soloChk.checked || remote.shown;
+  if (game.phase === 'idle') {
+    if (isReferee() && opponentPresent() && meIn && oppIn && now > game.cooldownUntil) {
+      if (!game.bothSince) game.bothSince = now;
+      if (now - game.bothSince > 700) { game.bothSince = 0; const id = game.id + 1; beginCount(id, now); netSend({ t: 'go', id }); }
+    } else game.bothSince = 0;
+  }
+  if (game.phase === 'count' || game.phase === 'collect') {
+    const beat = Math.floor((now - game.countStart) / BEAT_MS);
+    if (beat < 3 && beat !== game.beatShown) { game.beatShown = beat; showBanner(['אבן…', 'נייר…', 'ומספריים!'][beat], '', 'beat'); navigator.vibrate?.(25); }
+    if (now >= game.shootAt && game.phase === 'count') { game.phase = 'collect'; showBanner('🎯 עכשיו!', '', 'beat'); }
+    if (now >= game.shootAt - WINDOW_BEFORE && meIn) { const g = myGestureNow(now); if (g) game.votes[g] = (game.votes[g] || 0) + 1; }
+    if (now >= game.shootAt + WINDOW_AFTER) {
+      game.myThrow = majority(game.votes);
+      game.phase = 'wait'; game.waitUntil = now + 2500;
+      if (soloChk.checked) game.oppThrow = bot.gesture;
+      else if (!isHost) netSend({ t: 'throw', id: game.id, g: game.myThrow });
+    }
+  }
+  if (game.phase === 'wait') {
+    if (isReferee()) { if (game.oppThrow !== undefined || now > game.waitUntil) resolveRound(now); }
+    else if (now > game.waitUntil + 2000) { game.phase = 'idle'; hideBanner(); }   // result never arrived
+  }
+  if (game.phase === 'result' && now > game.resultUntil) { game.phase = 'idle'; game.cooldownUntil = now + 900; hideBanner(); }
+
+  // procedural hands
+  if (soloChk.checked && ready) onRemoteHand(poseHand(shownGesture(bot.gesture), pumpY(now)));
+  if (manualActive() && !soloChk.checked) {
+    if (manual.inside && ready) { if (now - lastSend > 33) { sendHand(poseHand(shownGesture(manual.gesture), pumpY(now))); lastSend = now; sentInside = true; } }
+    else if (sentInside) { sendHand(null); sentInside = false; }
+  }
+
+  // UI
+  manualBar.hidden = !(manualActive() && ready && opponentPresent());
+  $('mIn').textContent = manual.inside ? '✋ הוצא יד' : '✋ הכנס יד';
+  $('mIn').classList.toggle('in', manual.inside);
+  for (const b of manualBar.querySelectorAll('[data-g]')) b.classList.toggle('sel', b.dataset.g === manual.gesture);
+  let h = '';
+  if (game.phase === 'idle' && !(renderer.xr.isPresenting && mode !== 'placed')) {
+    if (!opponentPresent()) h = 'צור חדר, הצטרף לחבר או סמן "שחק נגד המחשב"';
+    else if (!meIn) h = manualActive() ? 'לחץ "הכנס יד" ובחר אבן, נייר או מספריים' : 'הכנס יד לפורטל כדי להתחיל סיבוב';
+    else if (!oppIn) h = 'מחכים שהיריב יכניס יד לפורטל…';
+    else h = isReferee() ? 'מתחילים…' : 'מחכים לסיבוב…';
+  }
+  if (hint.textContent !== h) hint.textContent = h;
+}
+$('mIn').addEventListener('click', () => { manual.inside = !manual.inside; });
+for (const b of manualBar.querySelectorAll('[data-g]')) b.addEventListener('click', () => { manual.gesture = b.dataset.g; manual.inside = true; });
+manualBar.addEventListener('beforexrselect', (e) => e.preventDefault());
+$('lobbyClose').addEventListener('click', () => { lobby.hidden = true; $('lobbyOpen').hidden = renderer.xr.isPresenting; });
+$('lobbyOpen').addEventListener('click', () => { lobby.hidden = false; $('lobbyOpen').hidden = true; });
+
+/* ---------------- hand tracking (MediaPipe on the WebXR camera image) ---------------- */
+let handLandmarker = null, mpState = 'idle';
+// Try each source in order. A copy of the model next to index.html wins (no dependency on Google's server).
+async function fetchFirst(urls, what) {
+  const errors = [];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, { cache: 'force-cache' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const buf = new Uint8Array(await r.arrayBuffer());
+      if (buf.length < 1000) throw new Error('file too small');
+      console.info(what + ' loaded from', u);
+      return buf;
+    } catch (e) { errors.push(u + ' → ' + e.message); }
+  }
+  throw new Error(what + ' download failed:\n' + errors.join('\n'));
+}
+async function loadHandTracker() {
+  if (mpState === 'loading' || mpState === 'ready') return;
+  mpState = 'loading'; mpChip.textContent = 'טוען זיהוי יד…'; mpChip.className = 'chip';
+  try {
+    const modelBuf = await fetchFirst(CONFIG.handModelUrls, 'hand model');
+    let lastErr;
+    for (const base of CONFIG.mpBases) {
+      try {
+        const { FilesetResolver, HandLandmarker } = await import(base + '/vision_bundle.mjs');
+        const files = await FilesetResolver.forVisionTasks(base + '/wasm');
+        const opts = (delegate) => ({ baseOptions: { modelAssetBuffer: modelBuf, delegate },
+          runningMode: 'VIDEO', numHands: 1, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+        try { handLandmarker = await HandLandmarker.createFromOptions(files, opts('GPU')); }
+        catch (e) { console.warn('GPU delegate failed, using CPU', e); handLandmarker = await HandLandmarker.createFromOptions(files, opts('CPU')); }
+        console.info('MediaPipe runtime from', base);
+        break;
+      } catch (e) { lastErr = e; console.warn('MediaPipe runtime failed from', base, e); }
+    }
+    if (!handLandmarker) throw lastErr || new Error('no runtime');
+    mpState = 'ready'; mpChip.textContent = '✋ זיהוי יד מוכן'; mpChip.className = 'chip on';
+  } catch (e) {
+    console.warn('MediaPipe failed', e); mpState = 'failed';
+    mpChip.textContent = '⚠️ זיהוי יד לא נטען · הקש לנסות שוב';
+    setStatus('לא הצלחנו להוריד את מודל זיהוי היד. אם יש חוסם פרסומות או סינון רשת, כבה אותו לאתר הזה ונסה שוב.');
+  }
+}
+mpChip.addEventListener('click', () => { if (mpState === 'failed') loadHandTracker(); });
+mpChip.addEventListener('beforexrselect', (e) => e.preventDefault());
+loadHandTracker();
+
+// SOLVER-START
+// Places MediaPipe's metric hand (worldLandmarks, origin ≈ hand centre, axes like the image:
+// x right, y down, z away from camera) in camera space by solving only for its translation,
+// so that it projects onto the 2D landmarks. Linear least squares, 3 unknowns.
+// lm: [{x,y}] normalised image coords (y down); wl: [{x,y,z}] metres; P: 16 column-major projection.
+// Returns camera-space points [[x,y,z]…] (three.js camera: looks down -Z), or null.
+function solveHandInCamera(lm, wl, P) {
+  const A = [0, 0, 0, 0, 0, 0, 0, 0, 0], B = [0, 0, 0];
+  const acc = (r0, r1, r2, b) => {
+    A[0] += r0 * r0; A[1] += r0 * r1; A[2] += r0 * r2;
+    A[4] += r1 * r1; A[5] += r1 * r2; A[8] += r2 * r2;
+    B[0] += r0 * b; B[1] += r1 * b; B[2] += r2 * b;
+  };
+  for (let i = 0; i < 21; i++) {
+    const ax = wl[i].x, ay = -wl[i].y, az = -wl[i].z;
+    const nx = 2 * lm[i].x - 1, ny = 1 - 2 * lm[i].y;
+    const cx = P[8] + nx, cy = P[9] + ny;
+    acc(P[0], P[4], cx, -(P[0] * ax + P[4] * ay + cx * az));
+    acc(P[1], P[5], cy, -(P[1] * ax + P[5] * ay + cy * az));
+  }
+  A[3] = A[1]; A[6] = A[2]; A[7] = A[5];
+  const det = A[0] * (A[4] * A[8] - A[5] * A[7]) - A[1] * (A[3] * A[8] - A[5] * A[6]) + A[2] * (A[3] * A[7] - A[4] * A[6]);
+  if (Math.abs(det) < 1e-12) return null;
+  const d3 = (m) => m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+  const col = (k) => { const m = A.slice(); m[k] = B[0]; m[k + 3] = B[1]; m[k + 6] = B[2]; return d3(m) / det; };
+  const tx = col(0), ty = col(1), tz = col(2);
+  if (!(tz < -0.06 && tz > -3)) return null;   // must be in front of the camera, 6 cm – 3 m
+  return wl.map((w) => [w.x + tx, -w.y + ty, -w.z + tz]);
+}
+// SOLVER-END
+
+const cam = { binding: null, prog: null, vao: null, fbo: null, tex: null, w: 0, h: 0, buf: null };
+const procCanvas = document.createElement('canvas');
+const procCtx = procCanvas.getContext('2d', { willReadFrequently: false });
+let procImage = null;
+const dbgCanvas = $('dbg'), dbgCtx = dbgCanvas.getContext('2d');
+$('dbgChk').addEventListener('change', (e) => { dbgCanvas.hidden = !e.target.checked; });
+
+function initCamGL(gl) {
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, 'attribute vec2 p; varying vec2 uv; void main(){ uv = p * 0.5 + 0.5; gl_Position = vec4(p, 0.0, 1.0); }'));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, 'precision mediump float; varying vec2 uv; uniform sampler2D t; void main(){ gl_FragColor = texture2D(t, uv); }'));
+  gl.bindAttribLocation(prog, 0, 'p');
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  cam.prog = prog;
+  cam.uTex = gl.getUniformLocation(prog, 't');
+  cam.vao = gl.createVertexArray();
+  gl.bindVertexArray(cam.vao);
+  const vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+}
+function ensureTarget(gl, w, h) {
+  if (cam.w === w && cam.h === h) return;
+  if (cam.tex) { gl.deleteTexture(cam.tex); gl.deleteFramebuffer(cam.fbo); }
+  cam.tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, cam.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  cam.fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, cam.fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, cam.tex, 0);
+  cam.w = w; cam.h = h; cam.buf = new Uint8Array(w * h * 4);
+  procCanvas.width = w; procCanvas.height = h; procImage = procCtx.createImageData(w, h);
+  dbgCanvas.width = w; dbgCanvas.height = h;
+}
+// Copies the current camera frame (aligned with `view`) into procCanvas, downscaled. Returns true on success.
+function grabCameraFrame(view) {
+  const gl = renderer.getContext();
+  if (!cam.binding) cam.binding = renderer.xr.getBinding?.() || new XRWebGLBinding(session, gl);
+  const camTex = cam.binding.getCameraImage(view.camera);
+  if (!camTex) return false;
+  const w = CONFIG.procWidth, h = Math.max(2, Math.round(w * view.camera.height / view.camera.width));
+  if (!cam.prog) initCamGL(gl);
+  ensureTarget(gl, w, h);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, cam.fbo);
+  gl.viewport(0, 0, w, h);
+  for (const cap of [gl.DEPTH_TEST, gl.BLEND, gl.CULL_FACE, gl.SCISSOR_TEST, gl.STENCIL_TEST]) gl.disable(cap);
+  gl.colorMask(true, true, true, true);
+  gl.useProgram(cam.prog);
+  gl.bindVertexArray(cam.vao);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, camTex);
+  gl.uniform1i(cam.uTex, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, cam.buf);
+  gl.bindVertexArray(null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  renderer.resetState();                     // three.js re-binds everything it needs on the next render
+  const row = w * 4, out = procImage.data;
+  if (CONFIG.flipCameraY) for (let y = 0; y < h; y++) out.set(cam.buf.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+  else out.set(cam.buf);
+  procCtx.putImageData(procImage, 0, 0);
+  return true;
+}
+
+const myHand = { local: Array.from({ length: 21 }, () => new THREE.Vector3()), last: 0, dist: 0, inside: false, has: false, gesture: null };
+const tmpM = new THREE.Matrix4(), tmpV = new THREE.Vector3();
+let lastDetect = 0, camAccess = false;
+function trackHand(frame, now) {
+  if (!camAccess || mpState !== 'ready' || mode !== 'placed' || now - lastDetect < CONFIG.detectIntervalMs) return;
+  const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
+  const view = pose?.views?.[0];
+  if (!view?.camera) return;
+  lastDetect = now;
+  let ok = false;
+  try { ok = grabCameraFrame(view); } catch (e) { console.warn('camera grab failed', e); camAccess = false; setStatus(TEXT.noCam); return; }
+  if (!ok) return;
+  const res = handLandmarker.detectForVideo(procCanvas, now);
+  const lm = res.landmarks?.[0], wl = res.worldLandmarks?.[0];
+  drawDebug(lm);
+  const camPts = lm && wl ? solveHandInCamera(lm, wl, view.projectionMatrix) : null;
+  if (!camPts) { myHand.has = false; return; }
+  tmpM.fromArray(view.transform.matrix);            // camera → world
+  portal.updateWorldMatrix(true, false);
+  const fresh = !myHand.has || now - myHand.last > 300;
+  let inside = false;
+  for (let i = 0; i < 21; i++) {
+    tmpV.set(camPts[i][0], camPts[i][1], camPts[i][2]).applyMatrix4(tmpM);
+    portal.worldToLocal(tmpV);
+    if (fresh) myHand.local[i].copy(tmpV); else myHand.local[i].lerp(tmpV, 0.65);
+    const p = myHand.local[i];
+    if (p.z < -0.01 && Math.hypot(p.x, p.y) < R * 0.97) inside = true;
+  }
+  myHand.has = true; myHand.last = now; myHand.inside = inside; myHand.dist = -camPts[9][2];
+  myHand.gesture = classifyGesture(myHand.local);
+  if (inside) {
+    const pack = new Array(63);
+    for (let i = 0; i < 21; i++) { const p = myHand.local[i]; pack[i * 3] = Math.round(p.x * 1000); pack[i * 3 + 1] = Math.round(p.y * 1000); pack[i * 3 + 2] = Math.round(p.z * 1000); }
+    if (now - lastSend > 30) { sendHand(pack); lastSend = now; }
+    sentInside = true;
+  } else if (sentInside) { sendHand(null); sentInside = false; }
+}
+function drawDebug(lm) {
+  if (dbgCanvas.hidden) return;
+  dbgCtx.drawImage(procCanvas, 0, 0);
+  if (!lm) return;
+  dbgCtx.fillStyle = '#4dff9a';
+  for (const p of lm) dbgCtx.fillRect(p.x * cam.w - 3, p.y * cam.h - 3, 6, 6);
+}
+function updateHandUI(now) {
+  const fresh = myHand.has && now - myHand.last < 300;
+  myHandOccluder.group.visible = fresh;
+  if (fresh) myHandOccluder.update(myHand.local);
+  if (!fresh && sentInside) { sendHand(null); sentInside = false; }
+  if (mode !== 'placed') { handChip.hidden = true; return; }
+  handChip.hidden = false;
+  if (!camAccess) { handChip.textContent = 'אין גישה למצלמה'; handChip.className = 'chip'; }
+  else if (!fresh) { handChip.textContent = 'לא רואה יד'; handChip.className = 'chip'; }
+  else if (myHand.inside) { handChip.textContent = '🌀 ' + (myHand.gesture ? NAME[myHand.gesture] : 'בפורטל'); handChip.className = 'chip hot'; }
+  else { handChip.textContent = '✋ יד זוהתה · ' + Math.round(myHand.dist * 100) + ' ס"מ'; handChip.className = 'chip on'; }
+}
+
+/* ---------------- preview controls ---------------- */
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, R + 0.04, 0);
+controls.enableDamping = true;
+controls.minDistance = 0.2; controls.maxDistance = 3;
+controls.update();
+
+/* ---------------- AR session ---------------- */
+async function detectAR() {
+  if (!window.isSecureContext) return 'insecure';
+  if (!('xr' in navigator)) return 'noXR';
+  try { return (await navigator.xr.isSessionSupported('immersive-ar')) ? 'ok' : 'unsupported'; } catch { return 'blocked'; }
+}
+let mode = 'preview';            // preview | placing | placed
+let hitTestSource = null, session = null;
+const support = await detectAR();
+document.documentElement.dataset.arSupport = support;
+if (support !== 'ok') setStatus(TEXT[support]);
+function updateStartButton() { startBtn.hidden = support !== 'ok' || !!session; }
+updateStartButton();
+
+const reticle = new THREE.Mesh(new THREE.RingGeometry(0.06, 0.075, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x4dff9a }));
+reticle.matrixAutoUpdate = false; reticle.visible = false;
+scene.add(noRay(reticle));
+
+startBtn.addEventListener('click', async () => {
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay', 'camera-access'],
+      domOverlay: { root: overlay },
+    });
+  } catch (e) { console.warn('requestSession failed', e); session = null; setStatus(TEXT.failed); return; }
+  try {
+    session.addEventListener('end', onSessionEnd);
+    renderer.xr.setReferenceSpaceType('local');
+    await renderer.xr.setSession(session);
+    const viewerSpace = await session.requestReferenceSpace('viewer');
+    hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+    session.addEventListener('select', onSelect);
+    camAccess = !session.enabledFeatures || session.enabledFeatures.includes('camera-access');
+    cam.binding = null;
+    scene.background = null;
+    controls.enabled = false;
+    lobby.hidden = true; $('lobbyOpen').hidden = true;
+    updateStartButton(); exitBtn.hidden = false;
+    enterPlacing();
+  } catch (e) {
+    console.warn('AR setup failed', e);
+    await session?.end().catch(() => {});
+    setStatus(TEXT.failed);
+  }
+});
+exitBtn.addEventListener('click', () => session?.end());
+moveBtn.addEventListener('click', enterPlacing);
+
+function enterPlacing() {
+  mode = 'placing';
+  anchor.visible = false;
+  moveBtn.hidden = true;
+  if (sentInside) { sendHand(null); sentInside = false; }
+  setStatus(TEXT.scan);
+}
+function onSelect() {
+  if (mode !== 'placing' || !reticle.visible) return;
+  anchor.position.setFromMatrixPosition(reticle.matrix);
+  const camPos = new THREE.Vector3().setFromMatrixPosition(renderer.xr.getCamera().matrixWorld);
+  anchor.rotation.set(0, Math.atan2(camPos.x - anchor.position.x, camPos.z - anchor.position.z), 0);
+  anchor.visible = true; reticle.visible = false;
+  mode = 'placed';
+  moveBtn.hidden = false;
+  setStatus(camAccess ? TEXT.placed : TEXT.noCam);
+  setTimeout(() => { if (mode === 'placed' && statusEl.textContent === TEXT.placed) setStatus(''); }, 6000);
+}
+function onSessionEnd() {
+  hitTestSource?.cancel?.();
+  hitTestSource = null; session = null; cam.binding = null; camAccess = false;
+  mode = 'preview';
+  anchor.position.set(0, 0, 0); anchor.rotation.set(0, 0, 0); anchor.visible = true;
+  reticle.visible = false;
+  scene.background = previewBg;
+  controls.enabled = true;
+  lobby.hidden = false; $('lobbyOpen').hidden = true;
+  exitBtn.hidden = true; moveBtn.hidden = true; handChip.hidden = true;
+  myHand.has = false;
+  updateStartButton();
+  setStatus('');
+  onResize();
+}
+
+/* ---------------- loop ---------------- */
+const timer = new THREE.Timer();
+timer.connect(document);
+renderer.setAnimationLoop((time, frame) => {
+  timer.update(time);
+  const dt = Math.min(timer.getDelta(), 0.1);
+  const now = performance.now();
+  if (frame && hitTestSource && mode === 'placing') {
+    const ref = renderer.xr.getReferenceSpace();
+    let found = false;
+    for (const h of frame.getHitTestResults(hitTestSource)) {
+      const pose = h.getPose(ref);
+      if (!pose) continue;
+      const m = pose.transform.matrix;
+      if (m[5] < CONFIG.maxFloorTilt) continue;
+      reticle.matrix.fromArray(m);
+      found = true; break;
+    }
+    reticle.visible = found;
+    setStatus(found ? TEXT.tap : TEXT.scan);
+  }
+  if (frame) trackHand(frame, now);
+  updateClipPlane();
+  updateHandUI(now);
+  stepGame(now);
+  stepRemote(dt, now);
+  swirlMat.uniforms.uTime.value += dt;
+  const active = (remote.shown || myHand.inside) ? 1 : 0;
+  swirlMat.uniforms.uActive.value += (active - swirlMat.uniforms.uActive.value) * Math.min(1, dt * 6);
+  glow.emissiveIntensity = 1.2 + swirlMat.uniforms.uActive.value * 1.5 + Math.sin(time * 0.004) * 0.15;
+  if (!renderer.xr.isPresenting) controls.update();
+  renderer.render(scene, camera);
+});
+
+function onResize() {
+  if (renderer.xr.isPresenting) return;
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onResize);
+
+// Invite link: ?join=1234 joins automatically.
+const joinParam = new URLSearchParams(location.search).get('join');
+if (joinParam) { $('codeIn').value = joinParam; joinRoom(joinParam); }
+
+window.__portalApp = { THREE, scene, portal, remoteHand, onRemoteHand, solveHandInCamera, get mode() { return mode; } };
+</script>
+</body>
+</html>

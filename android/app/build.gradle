@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The web app this Android app opens (GitHub Pages of this repo).
+def webHost = 'innomaster01-del.github.io'
+def webPath = '/portal-rps-ar/'
+def launchUrl = "https://${webHost}${webPath}"
+def buildNumber = (System.getenv('VERSION_CODE') ?: '1') as int
+
+android {
+    namespace 'io.github.innomaster01del.portalrps'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'io.github.innomaster01del.portalrps'   // permanent once published
+        minSdk 24
+        targetSdk 36
+        versionCode buildNumber
+        versionName "1.0.${buildNumber}"
+        manifestPlaceholders = [hostName: webHost, pathPrefix: webPath, launchUrl: launchUrl]
+    }
+
+    signingConfigs {
+        release {
+            if (System.getenv('KEYSTORE_PATH')) {
+                storeFile file(System.getenv('KEYSTORE_PATH'))
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('KEYSTORE_PATH') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+}
