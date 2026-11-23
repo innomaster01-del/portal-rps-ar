@@ -129,9 +129,9 @@ public final class HandMath {
     }
 
     /** Direction the opponent's hand comes out of my portal (portal space): toward me and a little down. */
-    private static final float[] OUT_F = norm3(0f, -0.5f, 0.87f);   // straight out of the centre, tilted down so the fingers read clearly
+    private static final float[] OUT_F = norm3(0f, -0.28f, 0.96f);  // straight out of the centre, tilted a little down
     /** Where its wrist sits: in front of the portal face, in the middle. */
-    private static final float[] WRIST_AT = {0f, 0.045f, 0.05f};       // centred; whole hand in front, the arm comes out of the swirl
+    private static final float[] WRIST_AT = {0f, -0.01f, 0.05f};       // centred, a bit low; whole hand in front, the arm comes out of the swirl
     public static float[] outDirection() { return OUT_F.clone(); }
 
     /**
