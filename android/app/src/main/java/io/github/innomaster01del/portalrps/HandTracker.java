@@ -61,9 +61,9 @@ final class HandTracker {
                     .setBaseOptions(BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build())
                     .setRunningMode(RunningMode.VIDEO)
                     .setNumHands(1)
-                    .setMinHandDetectionConfidence(0.5f)
-                    .setMinHandPresenceConfidence(0.5f)
-                    .setMinTrackingConfidence(0.5f)
+                    .setMinHandDetectionConfidence(0.35f)
+                    .setMinHandPresenceConfidence(0.35f)
+                    .setMinTrackingConfidence(0.35f)
                     .build();
                 landmarker = HandLandmarker.createFromOptions(app, opts);
             } catch (Throwable t) {

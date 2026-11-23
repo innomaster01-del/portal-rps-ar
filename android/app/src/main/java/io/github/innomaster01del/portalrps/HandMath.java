@@ -128,6 +128,55 @@ public final class HandMath {
              + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
     }
 
+    /** Direction the opponent's hand comes out of my portal (portal space): toward me, a little sideways and down. */
+    private static final float[] OUT_F = norm3(0.5f, -0.12f, 0.86f);
+    /** Where its wrist sits: just behind the portal face, off-centre so the hand crosses the swirl. */
+    private static final float[] WRIST_AT = {-0.05f, -0.005f, -0.035f};
+    public static float[] outDirection() { return OUT_F.clone(); }
+
+    /**
+     * Turns the opponent's hand (in THEIR portal space, any position or angle) into a hand coming out of
+     * MY portal: same finger shapes and palm roll, but always emerging toward me at a natural angle.
+     */
+    public static float[] receiverPose(float[] p) {
+        float[] f = sub3(p, 9, 0), s = sub3(p, 5, 17);
+        normalize3(f);
+        float d = dot3(s, f);
+        for (int i = 0; i < 3; i++) s[i] -= f[i] * d;
+        normalize3(s);
+        float[] u = cross3(f, s);
+        // palm roll around the finger direction, measured from "up" of the sender's portal
+        float[] yRef = {-f[1] * f[0], 1 - f[1] * f[1], -f[1] * f[2]};
+        if (len3(yRef) < 1e-3f) yRef = new float[]{1, 0, 0};
+        normalize3(yRef);
+        float[] xRef = cross3(f, yRef);
+        double roll = Math.atan2(dot3(u, xRef), dot3(u, yRef));
+        // my side: the 180° turn through the portal flips the roll
+        float[] f2 = OUT_F;
+        float[] y2 = {-f2[1] * f2[0], 1 - f2[1] * f2[1], -f2[1] * f2[2]};
+        normalize3(y2);
+        float[] x2 = cross3(f2, y2);
+        float cr = (float) Math.cos(-roll), sr = (float) Math.sin(-roll);
+        float[] u2 = {cr * y2[0] + sr * x2[0], cr * y2[1] + sr * x2[1], cr * y2[2] + sr * x2[2]};
+        float[] s2 = cross3(u2, f2);
+        float[] out = new float[63];
+        for (int i = 0; i < 21; i++) {
+            float dx = p[i * 3] - p[0], dy = p[i * 3 + 1] - p[1], dz = p[i * 3 + 2] - p[2];
+            float qx = dx * s[0] + dy * s[1] + dz * s[2];
+            float qy = dx * u[0] + dy * u[1] + dz * u[2];
+            float qz = dx * f[0] + dy * f[1] + dz * f[2];
+            for (int k = 0; k < 3; k++) out[i * 3 + k] = WRIST_AT[k] + qx * s2[k] + qy * u2[k] + qz * f2[k];
+        }
+        return out;
+    }
+
+    private static float[] norm3(float x, float y, float z) { float[] v = {x, y, z}; normalize3(v); return v; }
+    private static float[] sub3(float[] p, int a, int b) { return new float[]{p[a * 3] - p[b * 3], p[a * 3 + 1] - p[b * 3 + 1], p[a * 3 + 2] - p[b * 3 + 2]}; }
+    private static float dot3(float[] a, float[] b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+    private static float len3(float[] a) { return (float) Math.sqrt(dot3(a, a)); }
+    private static void normalize3(float[] a) { float l = len3(a); if (l > 1e-9f) { a[0] /= l; a[1] /= l; a[2] /= l; } }
+    private static float[] cross3(float[] a, float[] b) { return new float[]{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; }
+
     /** From a's point of view: 1 win, -1 loss, 0 draw, 2 nobody played. null = no hand. */
     public static int rps(String a, String b) {
         if (a == null && b == null) return 2;

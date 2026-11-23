@@ -59,7 +59,7 @@ import static io.github.innomaster01del.portalrps.HandMath.SCISSORS;
 public class MainActivity extends AppCompatActivity implements GLSurfaceView.Renderer, HandTracker.Listener, Net.Listener {
     private static final String TAG = "PortalRPS";
     private static final float PORTAL_R = SceneRenderer.R;
-    private static final float AIR_DIST = 0.6f;      // in-air placement distance in front of the phone (m)
+    private static final float AIR_DIST = 0.42f;     // in-air placement distance: within reach while holding the phone
     private static final int REQ_CAMERA = 7;
     private static final long BEAT_MS = 700, WINDOW_BEFORE = 150, WINDOW_AFTER = 600, RESULT_MS = 3200, OPEN_MS = 1100;
 
@@ -114,7 +114,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     // opponent hand (portal-local, my frame)
     private final float[] remTarget = new float[63], remCur = new float[63];
     private final OneEuro remFilter = new OneEuro(1.0, 8, 1.0);
-    private long remLast; private boolean remShown;
+    private long remLast, remShownAt; private boolean remShown;
+    private final float[] outF = HandMath.outDirection(), remDraw = new float[63];
 
     // room
     private volatile Net net;
@@ -428,7 +429,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 portalClip();
                 if (portalOpen && myHas && now - myLast < 300 && !manualActive()) scene.drawOccluder(toWorld(myLocal), clip);
                 scene.drawPortalOpaque(portalM, openAmt, spin);
-                if (remShown && openAmt > 0.9f) scene.drawHand(toWorld(remCur), clip);
+                if (remShown && openAmt > 0.9f) scene.drawHand(toWorld(remoteForDraw(now)), clip);
                 scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, flash);
             } else {
                 drawPlanes(s);
@@ -613,11 +614,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                     myLocal[i * 3] = tmp4b[0]; myLocal[i * 3 + 1] = tmp4b[1]; myLocal[i * 3 + 2] = tmp4b[2];
                 }
                 myFilter.filter(myLocal, System.nanoTime());
-                boolean inside = false;
-                for (int i = 0; i < 21; i++) {
-                    float x = myLocal[i * 3], y = myLocal[i * 3 + 1], z = myLocal[i * 3 + 2];
-                    if (z < -0.01f && Math.hypot(x, y) < PORTAL_R * 0.97f) inside = true;
-                }
+                boolean inside = handOnPortal(w, dist);
                 myHas = true; myLast = now; myInside = inside && portalOpen; myDist = dist;
                 myGesture = stableGesture();
             }
@@ -631,15 +628,47 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         }
     }
 
+    private final float[] vpM = new float[16], hv = new float[4], hcl = new float[4];
+
+    /**
+     * "In the portal" = the hand covers the portal on screen and is not right in front of the lens.
+     * (A phone held in one hand cannot see a hand pushed straight away from it, so we don't ask for that.)
+     */
+    private boolean handOnPortal(float[] w, float handDist) {
+        Matrix.multiplyMM(vpM, 0, projM, 0, viewM, 0);
+        int[] ids = {0, 5, 9, 13, 17};
+        hv[0] = hv[1] = hv[2] = 0; hv[3] = 1;
+        for (int id : ids) { hv[0] += w[id * 3] / 5; hv[1] += w[id * 3 + 1] / 5; hv[2] += w[id * 3 + 2] / 5; }
+        Matrix.multiplyMV(hcl, 0, vpM, 0, hv, 0);
+        if (hcl[3] <= 0) return false;
+        float hx = hcl[0] / hcl[3] * viewW / 2, hy = hcl[1] / hcl[3] * viewH / 2;
+        hv[0] = portalM[12]; hv[1] = portalM[13]; hv[2] = portalM[14];
+        Matrix.multiplyMV(hcl, 0, vpM, 0, hv, 0);
+        if (hcl[3] <= 0) return false;
+        float px = hcl[0] / hcl[3] * viewW / 2, py = hcl[1] / hcl[3] * viewH / 2, portalDist = hcl[3];
+        hv[0] = portalM[12] + portalM[0] * PORTAL_R; hv[1] = portalM[13] + portalM[1] * PORTAL_R; hv[2] = portalM[14] + portalM[2] * PORTAL_R;
+        Matrix.multiplyMV(hcl, 0, vpM, 0, hv, 0);
+        if (hcl[3] <= 0) return false;
+        float ex = hcl[0] / hcl[3] * viewW / 2, ey = hcl[1] / hcl[3] * viewH / 2;
+        float rScreen = (float) Math.hypot(ex - px, ey - py);
+        boolean covers = Math.hypot(hx - px, hy - py) < rScreen * 1.15f;
+        return covers && handDist > portalDist - 0.38f;
+    }
+
     /** p: hand in the SENDER's portal frame (metres). Shown turned 180°, so "into theirs" = "out of mine". */
     private void onRemotePose(float[] p, long now) {
-        for (int i = 0; i < 21; i++) {
-            remTarget[i * 3] = -p[i * 3];
-            remTarget[i * 3 + 1] = p[i * 3 + 1];
-            remTarget[i * 3 + 2] = -p[i * 3 + 2];
-        }
-        if (!remShown) { System.arraycopy(remTarget, 0, remCur, 0, 63); remShown = true; vibrate(25); }
+        float[] q = HandMath.receiverPose(p);       // same fingers, always coming out toward me
+        System.arraycopy(q, 0, remTarget, 0, 63);
+        if (!remShown) { System.arraycopy(remTarget, 0, remCur, 0, 63); remShown = true; remShownAt = now; vibrate(25); }
         remLast = now;
+    }
+
+    /** Opponent hand for drawing: slides out of the portal during the first 350 ms. */
+    private float[] remoteForDraw(long now) {
+        float e = Math.min(1, (now - remShownAt) / 350f);
+        float back = 0.17f * (1 - e) * (1 - e) * (1 - e);
+        for (int i = 0; i < 21; i++) for (int k = 0; k < 3; k++) remDraw[i * 3 + k] = remCur[i * 3 + k] - outF[k] * back;
+        return remDraw;
     }
 
     private void stepRemote(float dt, long now) {
@@ -735,7 +764,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             else if (portalOpening) h = "";
             else if (!solo && net == null) h = "פתח ⚙️ חדר: שחק נגד המחשב או עם חבר";
             else if (!present) h = net != null && net.host ? "מחכים שהחבר יצטרף…" : "מתחבר ליריב…";
-            else if (!meIn) h = manualActive() ? "לחץ \"הכנס יד\" ובחר אבן, נייר או מספריים" : "הכנס יד לפורטל כדי להתחיל סיבוב";
+            else if (!meIn) h = manualActive() ? "לחץ \"הכנס יד\" ובחר אבן, נייר או מספריים" : "שים את היד על הפורטל במסך, כף היד או הצד מול המצלמה ✋";
             else if (!oppIn) h = "מחכים שהיריב יכניס יד לפורטל…";
             else h = isReferee() ? "מתחילים…" : "מחכים לסיבוב…";
         }
@@ -803,8 +832,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             if (manualActive()) hand = tr != null && tr.error != null ? "זיהוי יד לא נטען · משחקים בכפתורים" : "🎮 כפתורים";
             else if (tr == null || !tr.ready()) hand = "טוען זיהוי יד…";
             else if (!(myHas && now - myLast < 300)) hand = "לא רואה יד";
-            else if (myInside) { hand = "🌀 " + (myGesture == null ? "בפורטל" : name(myGesture)); hot = true; }
-            else hand = "✋ " + (myGesture == null ? "יד זוהתה" : name(myGesture)) + " · " + Math.round(myDist * 100) + " ס\"מ";
+            else if (myInside) { hand = "🌀 בפורטל · " + (myGesture == null ? "?" : name(myGesture)); hot = true; }
+            else hand = "✋ " + (myGesture == null ? "יד זוהתה" : name(myGesture)) + " · הזז אותה על הפורטל";
         }
         String score = opponentPresent(now) ? "אתה " + scoreMe + " : " + scoreOpp + (solo ? " מחשב" : " יריב") : "";
         boolean manual = manualActive() && mode == PLACED && portalOpen && opponentPresent(now);

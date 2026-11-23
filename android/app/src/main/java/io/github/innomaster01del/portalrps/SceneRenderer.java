@@ -166,7 +166,7 @@ final class SceneRenderer {
         disc = Mesh.disc(R - 0.004f, 80);
         reticle = Mesh.flatRing(0.06f, 0.072f, 48);
         glowDisc = Mesh.disc(1f, 40);
-        notch = Mesh.box(0.012f, 0.026f, 0.014f);
+        notch = Mesh.box(0.007f, 0.016f, 0.009f);
         Matrix.setIdentityM(ident, 0);
         return bgTex;
     }
@@ -306,8 +306,8 @@ final class SceneRenderer {
         for (int i = 0; i < 8; i++) {
             Matrix.rotateM(tmp2, 0, portalM, 0, -spin * 0.6f + i * 45f, 0, 0, 1);
             Matrix.scaleM(tmp2, 0, open, open, open);
-            Matrix.translateM(tmp, 0, tmp2, 0, R + 0.017f, 0, 0);
-            draw(notch, tmp, 0.25f, 0.27f, 0.28f, 1, 0.05f * g, 0.45f * g, 0.22f * g, 0, NO_CLIP, 0.8f);
+            Matrix.translateM(tmp, 0, tmp2, 0, R + 0.013f, 0, 0);
+            draw(notch, tmp, 0.25f, 0.27f, 0.28f, 1, 0.02f * g, 0.2f * g, 0.1f * g, 0, NO_CLIP, 0.8f);
         }
     }
 
