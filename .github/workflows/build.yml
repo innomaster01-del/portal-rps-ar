@@ -70,6 +70,7 @@ jobs:
         run: |
           NAME="PortalRPS-v3.0.${VERSION_CODE}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$NAME"
+          cp "$NAME" PortalRPS.apk   # fixed name: .../releases/latest/download/PortalRPS.apk always works
           echo "apk=$NAME" >> "$GITHUB_OUTPUT"
           echo "## APK: $NAME ($(du -h "$NAME" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
 
@@ -87,5 +88,7 @@ jobs:
             אפליקציית אנדרואיד נייטיב (ARCore + זיהוי יד במכשיר).
             להתקנה: מורידים את קובץ ה-APK בטלפון ופותחים אותו.
             צריך טלפון שתומך ב-ARCore. בפעם הראשונה הטלפון אולי יבקש להתקין את Google Play Services for AR.
-          files: ${{ steps.out.outputs.apk }}
+          files: |
+            ${{ steps.out.outputs.apk }}
+            PortalRPS.apk
           make_latest: true
