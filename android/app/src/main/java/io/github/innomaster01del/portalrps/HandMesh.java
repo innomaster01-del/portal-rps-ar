@@ -77,8 +77,9 @@ final class HandMesh {
     private static int quadRing(short[] t, int k, int r0, int r1, int n) {
         for (int s = 0; s < n; s++) {
             int s1 = (s + 1) % n;
-            t[k++] = (short) (r0 + s); t[k++] = (short) (r1 + s); t[k++] = (short) (r0 + s1);
-            t[k++] = (short) (r0 + s1); t[k++] = (short) (r1 + s); t[k++] = (short) (r1 + s1);
+            // counter-clockwise seen from outside, so the outer surface is front-facing
+            t[k++] = (short) (r0 + s); t[k++] = (short) (r0 + s1); t[k++] = (short) (r1 + s);
+            t[k++] = (short) (r0 + s1); t[k++] = (short) (r1 + s1); t[k++] = (short) (r1 + s);
         }
         return k;
     }

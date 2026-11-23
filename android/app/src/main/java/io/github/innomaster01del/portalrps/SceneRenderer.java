@@ -38,19 +38,20 @@ final class SceneRenderer {
         "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying vec3 vL;" +
         "void main(){" +
         " if (dot(vec4(vW, 1.0), uClip) < 0.0) discard;" +
-        " if (uMode == 1) {" +                                   // semi-transparent swirl
-        "  vec2 p = vUV * 2.0 - 1.0; float r = length(p); float a = atan(p.y, p.x);" +
-        "  float s = sin(a * 4.0 + r * 13.0 - uTime * 3.2) * 0.5 + 0.5;" +
-        "  float s2 = sin(a * 7.0 - r * 21.0 + uTime * 4.7) * 0.5 + 0.5;" +
-        "  float arms = pow(s * (0.6 + 0.4 * s2), 2.0);" +
-        "  vec3 deep = vec3(0.0, 0.05, 0.04); vec3 lit = vec3(0.3, 1.0, 0.62);" +
-        "  vec3 c = mix(deep, lit, arms * (0.35 + 0.65 * r));" +
-        "  float edge = smoothstep(0.72, 1.0, r);" +
-        "  c += vec3(0.25, 1.0, 0.6) * edge * (0.8 + 0.6 * uActive);" +
-        "  float alpha = (0.28 + 0.42 * arms * r + 0.5 * edge + 0.12 * uActive) * uColor.a;" +
-        "  gl_FragColor = vec4(c, clamp(alpha, 0.0, 0.92)); return; }" +
+        " if (uMode == 1) {" +                                   // semi-transparent vortex
+        "  vec2 p = vUV * 2.0 - 1.0; float r = length(p); float a = atan(p.y, p.x); float lr = log(r + 0.03);" +
+        "  float arms = smoothstep(0.15, 1.0, sin(a * 3.0 + lr * 9.0 - uTime * 3.0)) * (0.35 + 0.65 * r);" +
+        "  float fine = sin(a * 11.0 + lr * 22.0 - uTime * 5.5) * 0.5 + 0.5;" +
+        "  arms *= 0.7 + 0.3 * fine;" +
+        "  float core = pow(max(1.0 - r, 0.0), 5.0);" +
+        "  float edge = smoothstep(0.8, 1.0, r);" +
+        "  vec3 c = mix(vec3(0.0, 0.07, 0.05), vec3(0.35, 1.0, 0.65), arms);" +
+        "  c += vec3(0.7, 1.0, 0.85) * core * 0.7 + vec3(0.25, 1.0, 0.6) * edge * (0.7 + 0.6 * uActive);" +
+        "  float alpha = (0.2 + 0.55 * arms + 0.45 * edge + 0.35 * core + 0.1 * uActive) * uColor.a;" +
+        "  gl_FragColor = vec4(c, clamp(alpha, 0.0, 0.9)); return; }" +
         " if (uMode == 2) {" +                                   // soft glow / shadow disc
-        "  float r = length(vUV * 2.0 - 1.0); gl_FragColor = vec4(uColor.rgb, uColor.a * (1.0 - smoothstep(0.1, 1.0, r))); return; }" +
+        "  float r = length(vUV * 2.0 - 1.0); float f = 1.0 - smoothstep(0.0, 1.0, r); f *= f;" +
+        "  gl_FragColor = vec4(uColor.rgb * f, uColor.a * f); return; }" +
         " if (uMode == 3) {" +                                   // energy ring: pulses running around
         "  float u = vUV.x; float k = pow(0.5 + 0.5 * sin(u * 37.7 - uTime * 6.0), 6.0) + pow(0.5 + 0.5 * sin(u * 18.85 + uTime * 3.0), 10.0);" +
         "  vec3 e = uEmissive * (0.55 + 1.2 * k);" +
@@ -58,6 +59,8 @@ final class SceneRenderer {
         " if (uMode == 4) {" +                                   // detected surface: dots
         "  vec2 g = fract(vW.xz * 22.0) - 0.5; float d = length(g);" +
         "  gl_FragColor = vec4(1.0, 1.0, 1.0, (1.0 - smoothstep(0.08, 0.14, d)) * uColor.a); return; }" +
+        " if (!gl_FrontFacing && dot(uClip.xyz, uClip.xyz) > 0.5) {" +   // the cut at the portal face glows
+        "  gl_FragColor = vec4(vec3(0.35, 1.0, 0.65) * (0.8 + 0.2 * sin(uTime * 6.0)), 1.0); return; }" +
         " vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;" +
         " vec3 v = normalize(uCam - vW);" +
         " float wrap = max((dot(n, uLight) + 0.35) / 1.35, 0.0);" +           // soft wrap lighting (skin)
@@ -317,10 +320,10 @@ final class SceneRenderer {
             draw(glowDisc, tmp, 0, 0, 0, 0.35f, 0, 0, 0, 2, NO_CLIP, 0);
             blend(true, true);
             Matrix.rotateM(tmp, 0, floorM, 0, -90, 1, 0, 0);
-            float gs = 0.06f + 0.12f * open;
+            float gs = 0.05f + 0.08f * open, gi = 0.25f + 0.35f * open + 0.25f * active;
             Matrix.scaleM(tmp, 0, gs, gs * 0.55f, 1);
             Matrix.translateM(tmp, 0, 0, 0, 0.003f);
-            draw(glowDisc, tmp, 0.1f * (0.4f + open), 0.6f * (0.4f + open), 0.35f * (0.4f + open), 1, 0, 0, 0, 2, NO_CLIP, 0);
+            draw(glowDisc, tmp, 0.12f * gi, 0.8f * gi, 0.45f * gi, 1, 0, 0, 0, 2, NO_CLIP, 0);
         }
         if (open >= 0.02f) {
             blend(true, false);

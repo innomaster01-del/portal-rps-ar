@@ -43,8 +43,12 @@ public final class HandMath {
                 P[base + 1 + s] = p;
             }
         }
+        // turn the hand palm-down (thumb to the side), the way people throw in this game, then pump
         float[] out = new float[63];
-        for (int i = 0; i < 21; i++) { out[i * 3] = P[i][0]; out[i * 3 + 1] = P[i][1]; out[i * 3 + 2] = P[i][2]; }
+        for (int i = 0; i < 21; i++) {
+            float x = P[i][0], y = P[i][1] - yOff;
+            out[i * 3] = y; out[i * 3 + 1] = -x + yOff + 0.02f; out[i * 3 + 2] = P[i][2];
+        }
         return out;
     }
 
