@@ -28,16 +28,24 @@ final class SceneRenderer {
     private static final String VS =
         "uniform mat4 uMVP; uniform mat4 uModel;" +
         "attribute vec3 aPos; attribute vec3 aNormal; attribute vec2 aUV;" +
-        "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying vec3 vL;" +
-        "void main(){ vec4 w = uModel * vec4(aPos, 1.0); vW = w.xyz; vN = (uModel * vec4(aNormal, 0.0)).xyz; vUV = aUV; vL = aPos;" +
-        " gl_Position = uMVP * vec4(aPos, 1.0); }";
+        "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying float vDepth;" +
+        "void main(){ vec4 w = uModel * vec4(aPos, 1.0); vW = w.xyz; vN = (uModel * vec4(aNormal, 0.0)).xyz; vUV = aUV;" +
+        " gl_Position = uMVP * vec4(aPos, 1.0); vDepth = gl_Position.w; }";
     private static final String FS =
         "precision mediump float;" +
         "uniform vec4 uColor; uniform vec3 uEmissive; uniform vec4 uClip; uniform int uMode; uniform float uTime;" +
         "uniform float uActive; uniform float uSpec; uniform vec3 uLight; uniform vec3 uCam;" +
-        "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying vec3 vL;" +
+        "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying float vDepth;" +
+        "uniform sampler2D uDepthTex; uniform float uUseDepth; uniform vec2 uViewport; uniform vec2 uUvA; uniform vec2 uUvB; uniform vec2 uUvC;" +
+        "float occlusion(float vd){" +                           // 1 = a real object is in front of this pixel
+        " if (uUseDepth < 0.5) return 0.0;" +
+        " vec2 ndc = gl_FragCoord.xy / uViewport * 2.0 - 1.0; vec2 uv = uUvA + uUvB * ndc.x + uUvC * ndc.y;" +
+        " vec4 d = texture2D(uDepthTex, uv); float real = (d.r * 255.0 + d.a * 65280.0) / 1000.0;" +
+        " if (real < 0.05) return 0.0;" +
+        " return smoothstep(-0.015, 0.035, vd - real); }" +
         "void main(){" +
         " if (dot(vec4(vW, 1.0), uClip) < 0.0) discard;" +
+        " float occ = occlusion(vDepth);" +
         " if (uMode == 1) {" +                                   // semi-transparent vortex
         "  vec2 p = vUV * 2.0 - 1.0; float r = length(p); float a = atan(p.y, p.x); float lr = log(r + 0.03);" +
         "  float arms = smoothstep(0.15, 1.0, sin(a * 3.0 + lr * 9.0 - uTime * 3.0)) * (0.35 + 0.65 * r);" +
@@ -48,17 +56,18 @@ final class SceneRenderer {
         "  vec3 c = mix(vec3(0.0, 0.07, 0.05), vec3(0.35, 1.0, 0.65), arms);" +
         "  c += vec3(0.7, 1.0, 0.85) * core * 0.7 + vec3(0.25, 1.0, 0.6) * edge * (0.7 + 0.6 * uActive);" +
         "  float alpha = (0.2 + 0.55 * arms + 0.45 * edge + 0.35 * core + 0.1 * uActive) * uColor.a;" +
-        "  gl_FragColor = vec4(c, clamp(alpha, 0.0, 0.9)); return; }" +
+        "  gl_FragColor = vec4(c, clamp(alpha, 0.0, 0.9) * (1.0 - occ)); return; }" +
         " if (uMode == 2) {" +                                   // soft glow / shadow disc
         "  float r = length(vUV * 2.0 - 1.0); float f = 1.0 - smoothstep(0.0, 1.0, r); f *= f;" +
-        "  gl_FragColor = vec4(uColor.rgb * f, uColor.a * f); return; }" +
+        "  f *= 1.0 - occ; gl_FragColor = vec4(uColor.rgb * f, uColor.a * f); return; }" +
+        " if (occ > 0.5) discard;" +
         " if (uMode == 3) {" +                                   // energy ring: pulses running around
         "  float u = vUV.x; float k = pow(0.5 + 0.5 * sin(u * 37.7 - uTime * 6.0), 6.0) + pow(0.5 + 0.5 * sin(u * 18.85 + uTime * 3.0), 10.0);" +
         "  vec3 e = uEmissive * (0.55 + 1.2 * k);" +
         "  gl_FragColor = vec4(e, uColor.a); return; }" +
         " if (uMode == 4) {" +                                   // detected surface: dots
         "  vec2 g = fract(vW.xz * 22.0) - 0.5; float d = length(g);" +
-        "  gl_FragColor = vec4(1.0, 1.0, 1.0, (1.0 - smoothstep(0.08, 0.14, d)) * uColor.a); return; }" +
+        "  gl_FragColor = vec4(1.0, 1.0, 1.0, (1.0 - smoothstep(0.08, 0.14, d)) * uColor.a * (1.0 - occ)); return; }" +
         " if (!gl_FrontFacing && dot(uClip.xyz, uClip.xyz) > 0.5) {" +   // the cut at the portal face glows
         "  gl_FragColor = vec4(vec3(0.35, 1.0, 0.65) * (0.8 + 0.2 * sin(uTime * 6.0)), 1.0); return; }" +
         " vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;" +
@@ -75,7 +84,7 @@ final class SceneRenderer {
 
     private static final String P_VS =
         "uniform mat4 uMVP; uniform float uTime; uniform float uSize; uniform float uR;" +
-        "attribute vec3 aSeed; varying float vA;" +
+        "attribute vec3 aSeed; varying float vA; varying float vDepth;" +
         "void main(){" +
         " float life = fract(uTime * 0.33 + aSeed.x * 0.159);" +
         " float a = aSeed.x + uTime * aSeed.z;" +
@@ -84,17 +93,29 @@ final class SceneRenderer {
         " vec3 p = vec3(cos(a) * r, sin(a) * r, (fract(aSeed.x * 7.3) - 0.5) * 0.03 * (1.0 - inward));" +
         " gl_Position = uMVP * vec4(p, 1.0);" +
         " gl_PointSize = uSize * (0.5 + fract(aSeed.x * 5.1)) / max(gl_Position.w, 0.05);" +
-        " vA = sin(life * 3.14159);" +
+        " vA = sin(life * 3.14159); vDepth = gl_Position.w;" +
         "}";
     private static final String P_FS =
-        "precision mediump float; uniform vec3 uColor; uniform float uAlpha; varying float vA;" +
-        "void main(){ float d = length(gl_PointCoord - 0.5); float a = (1.0 - smoothstep(0.0, 0.5, d)) * vA * uAlpha;" +
+        "precision mediump float; uniform vec3 uColor; uniform float uAlpha; varying float vA; varying float vDepth;" +
+        "uniform sampler2D uDepthTex; uniform float uUseDepth; uniform vec2 uViewport; uniform vec2 uUvA; uniform vec2 uUvB; uniform vec2 uUvC;" +
+        "float occlusion(float vd){" +                           // 1 = a real object is in front of this pixel
+        " if (uUseDepth < 0.5) return 0.0;" +
+        " vec2 ndc = gl_FragCoord.xy / uViewport * 2.0 - 1.0; vec2 uv = uUvA + uUvB * ndc.x + uUvC * ndc.y;" +
+        " vec4 d = texture2D(uDepthTex, uv); float real = (d.r * 255.0 + d.a * 65280.0) / 1000.0;" +
+        " if (real < 0.05) return 0.0;" +
+        " return smoothstep(-0.015, 0.035, vd - real); }" +
+        "void main(){ float d = length(gl_PointCoord - 0.5); float a = (1.0 - smoothstep(0.0, 0.5, d)) * vA * uAlpha * (1.0 - occlusion(vDepth));" +
         " gl_FragColor = vec4(uColor * a, a); }";
 
     private int bgTex, bgProg, bgPos, bgUV, bgSampler;
     private FloatBuffer quad, quadUV;
     private int prog, aPos, aNormal, aUV, uMVP, uModel, uColor, uEmissive, uClip, uMode, uTime, uActive, uSpec, uLight, uCam;
     private int pProg, pSeed, pMVP, pTime, pSize, pR, pColor, pAlpha, pVbo, pCount;
+    private int depthTex, depthW, depthH;
+    private boolean depthOk;
+    private final float[] uvA = new float[2], uvB = new float[2], uvC = new float[2];
+    private java.nio.ByteBuffer depthBuf;
+    private float vpW = 1, vpH = 1;
     private Mesh sphere, ring, ringGlow, disc, reticle, glowDisc, notch, flashRing;
     private final HandMesh remoteMesh = new HandMesh(true), occMesh = new HandMesh(false);
     private final float[] view = new float[16], proj = new float[16], vp = new float[16], mvp = new float[16];
@@ -168,10 +189,64 @@ final class SceneRenderer {
         glowDisc = Mesh.disc(1f, 40);
         notch = Mesh.box(0.007f, 0.016f, 0.009f);
         Matrix.setIdentityM(ident, 0);
+        int[] dt = new int[1];
+        GLES20.glGenTextures(1, dt, 0);
+        depthTex = dt[0];
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTex);
+        // NEAREST: the two bytes of a 16-bit depth value must never be blended with neighbours
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
         return bgTex;
     }
 
     void setViewportHeight(int h) { pointScale = h / 1000f; }
+    void setViewportSize(int w, int h) { vpW = w; vpH = h; pointScale = h / 1000f; }
+
+    /** Screen NDC -> depth-image UV, as uv = A + B * ndc.x + C * ndc.y. */
+    void setDepthUvTransform(float[] a, float[] b, float[] c) {
+        uvA[0] = a[0]; uvA[1] = a[1]; uvB[0] = b[0]; uvB[1] = b[1]; uvC[0] = c[0]; uvC[1] = c[1];
+    }
+
+    /** Uploads ARCore's 16-bit depth image (millimetres). Pass null when there is none this frame. */
+    void updateDepth(android.media.Image img) {
+        if (img == null) return;
+        android.media.Image.Plane pl = img.getPlanes()[0];
+        int w = img.getWidth(), h = img.getHeight(), row = pl.getRowStride();
+        java.nio.ByteBuffer src = pl.getBuffer();
+        if (depthBuf == null || depthBuf.capacity() < w * h * 2) depthBuf = java.nio.ByteBuffer.allocateDirect(w * h * 2).order(java.nio.ByteOrder.nativeOrder());
+        depthBuf.clear();
+        if (row == w * 2) { src.rewind(); src.limit(Math.min(src.capacity(), w * h * 2)); depthBuf.put(src); }
+        else for (int y = 0; y < h; y++) { src.limit(y * row + w * 2); src.position(y * row); depthBuf.put(src); }
+        depthBuf.flip();
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTex);
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 2);
+        if (w != depthW || h != depthH) {
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE_ALPHA, w, h, 0, GLES20.GL_LUMINANCE_ALPHA, GLES20.GL_UNSIGNED_BYTE, depthBuf);
+            depthW = w; depthH = h;
+        } else {
+            GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, w, h, GLES20.GL_LUMINANCE_ALPHA, GLES20.GL_UNSIGNED_BYTE, depthBuf);
+        }
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 4);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        depthOk = true;
+    }
+
+    void setDepthAvailable(boolean ok) { if (!ok) depthOk = false; }
+
+    private void bindOcclusion(int program) {
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTex);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uDepthTex"), 1);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uUseDepth"), depthOk ? 1f : 0f);
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uViewport"), vpW, vpH);
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uUvA"), uvA[0], uvA[1]);
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uUvB"), uvB[0], uvB[1]);
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uUvC"), uvC[0], uvC[1]);
+    }
 
     void drawBackground(Frame frame) {
         if (frame.hasDisplayGeometryChanged()) {
@@ -216,6 +291,7 @@ final class SceneRenderer {
         GLES20.glUniform3f(uCam, cam[0], cam[1], cam[2]);
         GLES20.glUniform1f(uTime, time);
         GLES20.glUniform1f(uActive, active);
+        bindOcclusion(prog);
     }
 
     private void setCommon(float[] model, float r, float g, float b, float a, float er, float eg, float eb, int mode, float[] clip, float spec) {
@@ -274,13 +350,19 @@ final class SceneRenderer {
         draw(reticle, tmp, 0.2f, 1f, 0.6f, 1, 0.15f, 0.9f, 0.45f, 0, NO_CLIP, 0);
     }
 
-    /** Faint outline where the portal will appear in the air. */
-    void drawGhost(float[] portalM) {
+    /** Semi-transparent preview of the portal where a tap will place it. */
+    void drawGhost(float[] portalM, float spin) {
+        float s = 1 + 0.02f * (float) Math.sin(time * 3);
         blend(true, false);
-        float s = 1 + 0.03f * (float) Math.sin(time * 3);
-        Matrix.scaleM(tmp, 0, portalM, 0, s, s, s);
-        draw(flashRing, tmp, 0, 0, 0, 0.55f, 0.15f, 0.8f, 0.45f, 3, NO_CLIP, 0);
+        Matrix.rotateM(tmp2, 0, portalM, 0, spin, 0, 0, 1);
+        Matrix.scaleM(tmp, 0, tmp2, 0, s, s, s);
+        draw(ring, tmp, 0.3f, 0.33f, 0.35f, 0.45f, 0, 0, 0, 0, NO_CLIP, 0.8f);
+        draw(disc, tmp, 1, 1, 1, 0.3f, 0, 0, 0, 1, NO_CLIP, 0);
+        blend(true, true);
+        draw(ringGlow, tmp, 0, 0, 0, 1, 0.05f, 0.45f, 0.22f, 3, NO_CLIP, 0);
+        drawParticles(tmp, 0.35f);
         blend(false, false);
+        useMain();
     }
 
     /* ------------------------------ portal ------------------------------ */
@@ -357,6 +439,7 @@ final class SceneRenderer {
         GLES20.glUniform1f(pR, R);
         GLES20.glUniform3f(pColor, 0.45f, 1.0f, 0.7f);
         GLES20.glUniform1f(pAlpha, alpha);
+        bindOcclusion(pProg);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, pVbo);
         GLES20.glEnableVertexAttribArray(pSeed);
         GLES20.glVertexAttribPointer(pSeed, 3, GLES20.GL_FLOAT, false, 0, 0);

@@ -78,7 +78,10 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private boolean installRequested;
     private final SceneRenderer scene = new SceneRenderer();
     private int bgTex = -1, viewW, viewH;
-    private volatile boolean geometryDirty;
+    private volatile boolean geometryDirty, depthSupported;
+    private final float[] ndcPts = {0, 0, 1, 0, 0, 1}, uvPts = new float[6];
+    private final float[] ghostPos = new float[3];
+    private float ghostYaw; private boolean ghostInit;
     private volatile HandTracker tracker;
     private final ConcurrentLinkedQueue<float[]> taps = new ConcurrentLinkedQueue<>();
     private volatile boolean moveRequested, resetRequested;
@@ -207,6 +210,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 cfg.setPlaneFindingMode(Config.PlaneFindingMode.HORIZONTAL);
                 cfg.setUpdateMode(Config.UpdateMode.LATEST_CAMERA_IMAGE);
                 cfg.setLightEstimationMode(Config.LightEstimationMode.DISABLED);
+                // real-world depth, so real things in front of the portal hide it
+                depthSupported = session.isDepthModeSupported(Config.DepthMode.AUTOMATIC);
+                if (depthSupported) cfg.setDepthMode(Config.DepthMode.AUTOMATIC);
                 session.configure(cfg);
                 tracker = new HandTracker(this, sensorRotation(), this);
                 tracker.debug = debugChk.isChecked();
@@ -371,7 +377,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     @Override public void onSurfaceChanged(GL10 gl, int w, int h) {
         GLES20.glViewport(0, 0, w, h);
         viewW = w; viewH = h; geometryDirty = true;
-        scene.setViewportHeight(h);
+        scene.setViewportSize(w, h);
     }
 
     @Override public void onDrawFrame(GL10 gl) {
@@ -384,6 +390,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         try { frame = s.update(); } catch (Exception e) { return; }
         Camera camera = frame.getCamera();
         scene.drawBackground(frame);
+        updateDepth(frame);
 
         long now = SystemClock.uptimeMillis();
         float dt = lastFrame == 0 ? 0.016f : Math.min((now - lastFrame) / 1000f, 0.1f);
@@ -401,6 +408,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             moveRequested = false;
             if (anchor != null) { anchor.detach(); anchor = null; }
             mode = PLACING;
+            ghostInit = false;
             portalOpen = false; portalOpening = false; openAmt = 0;
             if (sentInside) { sendHand(null); sentInside = false; }
         }
@@ -434,10 +442,21 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             } else {
                 drawPlanes(s);
                 if (reticleOk) scene.drawReticle(reticleM);
-                else scene.drawGhost(ghostM);
+                scene.drawGhost(ghostM, spin);
             }
         }
         updateUi(now);
+    }
+
+    private void updateDepth(Frame frame) {
+        if (!depthSupported) { scene.setDepthAvailable(false); return; }
+        frame.transformCoordinates2d(com.google.ar.core.Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES, ndcPts,
+            com.google.ar.core.Coordinates2d.TEXTURE_NORMALIZED, uvPts);
+        scene.setDepthUvTransform(new float[]{uvPts[0], uvPts[1]}, new float[]{uvPts[2] - uvPts[0], uvPts[3] - uvPts[1]},
+            new float[]{uvPts[4] - uvPts[0], uvPts[5] - uvPts[1]});
+        try (android.media.Image d = frame.acquireDepthImage16Bits()) {
+            scene.updateDepth(d);
+        } catch (Exception notYet) { /* keep the last depth image */ }
     }
 
     private void drawPlanes(Session s) {
@@ -470,9 +489,21 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         fx /= fl; fz /= fl;
         float ax = c[0] + fx * AIR_DIST, ay = c[1] - 0.05f, az = c[2] + fz * AIR_DIST;
         float airYaw = (float) Math.toDegrees(Math.atan2(-fx, -fz));
+        float tx = ax, ty = ay, tz = az, tyaw = airYaw;
+        if (reticleOk) {
+            tx = reticleM[12]; ty = reticleM[13] + SceneRenderer.PORTAL_H; tz = reticleM[14];
+            tyaw = (float) Math.toDegrees(Math.atan2(c[0] - tx, c[2] - tz));
+        }
+        float k = ghostInit ? 0.2f : 1f;                       // glide instead of jumping with every hand shake
+        ghostInit = true;
+        ghostPos[0] += (tx - ghostPos[0]) * k; ghostPos[1] += (ty - ghostPos[1]) * k; ghostPos[2] += (tz - ghostPos[2]) * k;
+        float dy = ((tyaw - ghostYaw + 540) % 360) - 180;
+        ghostYaw += dy * k;
+        ax = ghostPos[0]; ay = ghostPos[1]; az = ghostPos[2]; airYaw = ghostYaw;
+        if (reticleOk) { ax = tx; ay = ty - SceneRenderer.PORTAL_H; az = tz; }
         Matrix.setIdentityM(ghostM, 0);
-        Matrix.translateM(ghostM, 0, ax, ay, az);
-        Matrix.rotateM(ghostM, 0, airYaw, 0, 1, 0);
+        Matrix.translateM(ghostM, 0, ghostPos[0], ghostPos[1], ghostPos[2]);
+        Matrix.rotateM(ghostM, 0, ghostYaw, 0, 1, 0);
 
         boolean tapped = false;
         while (taps.poll() != null) tapped = true;
@@ -483,9 +514,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             float[] a = anchor.getPose().getTranslation();
             yaw = (float) Math.toDegrees(Math.atan2(c[0] - a[0], c[2] - a[2]));
         } else {
-            anchor = session.createAnchor(new Pose(new float[]{ax, ay, az}, new float[]{0, 0, 0, 1}));
+            anchor = session.createAnchor(new Pose(new float[]{ghostPos[0], ghostPos[1], ghostPos[2]}, new float[]{0, 0, 0, 1}));
             floating = true;
-            yaw = airYaw;
+            yaw = ghostYaw;
         }
         mode = PLACED;
         placedAt = now;
@@ -666,7 +697,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     /** Opponent hand for drawing: slides out of the portal during the first 350 ms. */
     private float[] remoteForDraw(long now) {
         float e = Math.min(1, (now - remShownAt) / 350f);
-        float back = 0.17f * (1 - e) * (1 - e) * (1 - e);
+        float back = 0.24f * (1 - e) * (1 - e) * (1 - e);
         for (int i = 0; i < 21; i++) for (int k = 0; k < 3; k++) remDraw[i * 3 + k] = remCur[i * 3 + k] - outF[k] * back;
         return remDraw;
     }
