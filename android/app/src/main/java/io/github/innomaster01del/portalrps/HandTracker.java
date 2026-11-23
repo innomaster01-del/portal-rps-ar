@@ -33,7 +33,11 @@ final class HandTracker {
     interface Listener {
         /** worldPts: float[63] in ARCore world metres, or null when no hand. distance in metres. */
         void onHand(float[] worldPts, float distance);
+        /** Optional: the picture the detector saw, with the found joints drawn on it. */
+        default void onDebugImage(Bitmap b) {}
     }
+
+    volatile boolean debug;
 
     private static final String TAG = "HandTracker";
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
@@ -113,15 +117,15 @@ final class HandTracker {
 
     private void process(byte[] Y, byte[] U, byte[] V, int w, int h, int yRow, int uvRow, int uvPix,
                          float fx, float fy, float cx, float cy, float iw, float ih, Pose pose) {
-        // half-resolution RGB, turned upright so the hand detector sees a normal picture
-        int sw = w / 2, sh = h / 2;
+        // full-resolution RGB, turned upright so the hand detector sees a normal picture
+        int sw = w, sh = h;
         boolean swap = rotation == 90 || rotation == 270;
         int ow = swap ? sh : sw, oh = swap ? sw : sh;
         if (argb == null || argb.length != ow * oh) argb = new int[ow * oh];
         for (int sy = 0; sy < sh; sy++) {
-            int fyy = sy * 2;
+            int fyy = sy;
             for (int sx = 0; sx < sw; sx++) {
-                int fxx = sx * 2;
+                int fxx = sx;
                 int yy = Y[fyy * yRow + fxx] & 0xff;
                 int uvIdx = (fyy / 2) * uvRow + (fxx / 2) * uvPix;
                 int uu = (U[Math.min(uvIdx, U.length - 1)] & 0xff) - 128;
@@ -142,8 +146,10 @@ final class HandTracker {
         Bitmap bmp = Bitmap.createBitmap(argb, ow, oh, Bitmap.Config.ARGB_8888);
         MPImage mp = new BitmapImageBuilder(bmp).build();
         HandLandmarkerResult res = landmarker.detectForVideo(mp, SystemClock.uptimeMillis());
+        boolean found = !res.landmarks().isEmpty() && !res.worldLandmarks().isEmpty();
+        if (debug) sendDebug(bmp, found ? res.landmarks().get(0) : null);
         bmp.recycle();
-        if (res.landmarks().isEmpty() || res.worldLandmarks().isEmpty()) { listener.onHand(null, 0); return; }
+        if (!found) { listener.onHand(null, 0); return; }
         List<NormalizedLandmark> lm = res.landmarks().get(0);
         List<Landmark> wl = res.worldLandmarks().get(0);
         float[] nx = new float[21], ny = new float[21], wp = new float[63];
@@ -174,6 +180,29 @@ final class HandTracker {
             out[i * 3] = wpt[0]; out[i * 3 + 1] = wpt[1]; out[i * 3 + 2] = wpt[2];
         }
         listener.onHand(out, (float) t[2]);
+    }
+
+    private long lastDebug;
+    private static final int[][] BONES = {{0, 1}, {1, 2}, {2, 3}, {3, 4}, {0, 5}, {5, 6}, {6, 7}, {7, 8}, {5, 9}, {9, 10}, {10, 11}, {11, 12},
+        {9, 13}, {13, 14}, {14, 15}, {15, 16}, {13, 17}, {0, 17}, {17, 18}, {18, 19}, {19, 20}};
+
+    private void sendDebug(Bitmap src, List<NormalizedLandmark> lm) {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastDebug < 150) return;
+        lastDebug = now;
+        int dw = 240, dh = Math.round(240f * src.getHeight() / src.getWidth());
+        Bitmap b = Bitmap.createScaledBitmap(src, dw, dh, true);
+        if (lm != null) {
+            android.graphics.Canvas cv = new android.graphics.Canvas(b);
+            android.graphics.Paint line = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            line.setColor(0xFF4DFF9A); line.setStrokeWidth(3);
+            for (int[] bn : BONES)
+                cv.drawLine(lm.get(bn[0]).x() * dw, lm.get(bn[0]).y() * dh, lm.get(bn[1]).x() * dw, lm.get(bn[1]).y() * dh, line);
+            android.graphics.Paint dot = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            dot.setColor(0xFFFFFFFF);
+            for (NormalizedLandmark l : lm) cv.drawCircle(l.x() * dw, l.y() * dh, 3.5f, dot);
+        }
+        listener.onDebugImage(b);
     }
 
     private static int clamp(int x) { return x < 0 ? 0 : (x > 255 ? 255 : x); }

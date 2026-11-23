@@ -10,11 +10,12 @@ import com.google.ar.core.Frame;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.Random;
 
-/** All OpenGL drawing: camera background, portal, hands, reticle. GL thread only. */
+/** All OpenGL drawing: camera background, planes, portal, hands. GL thread only. */
 final class SceneRenderer {
-    static final float R = 0.14f;            // portal radius (m)
-    static final float PORTAL_H = R + 0.04f; // ring centre above the table
+    static final float R = 0.15f;             // portal radius (m)
+    static final float PORTAL_H = R + 0.06f;  // ring centre above the surface (it hovers)
 
     private static final String BG_VS =
         "attribute vec4 a_Pos; attribute vec2 a_UV; varying vec2 v_UV;" +
@@ -27,40 +28,77 @@ final class SceneRenderer {
     private static final String VS =
         "uniform mat4 uMVP; uniform mat4 uModel;" +
         "attribute vec3 aPos; attribute vec3 aNormal; attribute vec2 aUV;" +
-        "varying vec3 vN; varying vec3 vW; varying vec2 vUV;" +
-        "void main(){ vec4 w = uModel * vec4(aPos, 1.0); vW = w.xyz; vN = (uModel * vec4(aNormal, 0.0)).xyz; vUV = aUV;" +
+        "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying vec3 vL;" +
+        "void main(){ vec4 w = uModel * vec4(aPos, 1.0); vW = w.xyz; vN = (uModel * vec4(aNormal, 0.0)).xyz; vUV = aUV; vL = aPos;" +
         " gl_Position = uMVP * vec4(aPos, 1.0); }";
     private static final String FS =
         "precision mediump float;" +
         "uniform vec4 uColor; uniform vec3 uEmissive; uniform vec4 uClip; uniform int uMode; uniform float uTime;" +
         "uniform float uActive; uniform float uSpec; uniform vec3 uLight; uniform vec3 uCam;" +
-        "varying vec3 vN; varying vec3 vW; varying vec2 vUV;" +
+        "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying vec3 vL;" +
         "void main(){" +
         " if (dot(vec4(vW, 1.0), uClip) < 0.0) discard;" +
-        " if (uMode == 1) {" +                                   // portal swirl
+        " if (uMode == 1) {" +                                   // semi-transparent swirl
         "  vec2 p = vUV * 2.0 - 1.0; float r = length(p); float a = atan(p.y, p.x);" +
-        "  float s = sin(a * 5.0 + r * 15.0 - uTime * 4.0) * 0.5 + 0.5;" +
-        "  float s2 = sin(a * 3.0 - r * 9.0 + uTime * 2.3) * 0.5 + 0.5;" +
-        "  vec3 c = mix(vec3(0.01, 0.12, 0.07), vec3(0.35, 1.0, 0.6), s * s2 * (1.0 - r * 0.7));" +
-        "  c += vec3(0.1, 0.5, 0.3) * pow(1.0 - r, 2.0) * (0.5 + uActive);" +
-        "  gl_FragColor = vec4(c, 1.0); return; }" +
-        " if (uMode == 2) {" +                                   // soft contact shadow
-        "  float r = length(vUV * 2.0 - 1.0); gl_FragColor = vec4(0.0, 0.0, 0.0, uColor.a * (1.0 - smoothstep(0.2, 1.0, r))); return; }" +
+        "  float s = sin(a * 4.0 + r * 13.0 - uTime * 3.2) * 0.5 + 0.5;" +
+        "  float s2 = sin(a * 7.0 - r * 21.0 + uTime * 4.7) * 0.5 + 0.5;" +
+        "  float arms = pow(s * (0.6 + 0.4 * s2), 2.0);" +
+        "  vec3 deep = vec3(0.0, 0.05, 0.04); vec3 lit = vec3(0.3, 1.0, 0.62);" +
+        "  vec3 c = mix(deep, lit, arms * (0.35 + 0.65 * r));" +
+        "  float edge = smoothstep(0.72, 1.0, r);" +
+        "  c += vec3(0.25, 1.0, 0.6) * edge * (0.8 + 0.6 * uActive);" +
+        "  float alpha = (0.28 + 0.42 * arms * r + 0.5 * edge + 0.12 * uActive) * uColor.a;" +
+        "  gl_FragColor = vec4(c, clamp(alpha, 0.0, 0.92)); return; }" +
+        " if (uMode == 2) {" +                                   // soft glow / shadow disc
+        "  float r = length(vUV * 2.0 - 1.0); gl_FragColor = vec4(uColor.rgb, uColor.a * (1.0 - smoothstep(0.1, 1.0, r))); return; }" +
+        " if (uMode == 3) {" +                                   // energy ring: pulses running around
+        "  float u = vUV.x; float k = pow(0.5 + 0.5 * sin(u * 37.7 - uTime * 6.0), 6.0) + pow(0.5 + 0.5 * sin(u * 18.85 + uTime * 3.0), 10.0);" +
+        "  vec3 e = uEmissive * (0.55 + 1.2 * k);" +
+        "  gl_FragColor = vec4(e, uColor.a); return; }" +
+        " if (uMode == 4) {" +                                   // detected surface: dots
+        "  vec2 g = fract(vW.xz * 22.0) - 0.5; float d = length(g);" +
+        "  gl_FragColor = vec4(1.0, 1.0, 1.0, (1.0 - smoothstep(0.08, 0.14, d)) * uColor.a); return; }" +
         " vec3 n = normalize(vN); if (!gl_FrontFacing) n = -n;" +
-        " float diff = max(dot(n, uLight), 0.0);" +
-        " vec3 v = normalize(uCam - vW); vec3 h = normalize(uLight + v);" +
-        " float spec = pow(max(dot(n, h), 0.0), 40.0) * uSpec;" +
-        " float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.25;" +
-        " gl_FragColor = vec4(uColor.rgb * (0.42 + diff * 0.72) + vec3(spec + rim * uSpec) + uEmissive, uColor.a);" +
+        " vec3 v = normalize(uCam - vW);" +
+        " float wrap = max((dot(n, uLight) + 0.35) / 1.35, 0.0);" +           // soft wrap lighting (skin)
+        " vec3 h = normalize(uLight + v);" +
+        " float spec = pow(max(dot(n, h), 0.0), 48.0) * uSpec;" +
+        " float rim = pow(1.0 - max(dot(n, v), 0.0), 2.5);" +
+        " vec3 col = uColor.rgb * (0.38 + 0.7 * wrap) + vec3(spec) + uEmissive;" +
+        " col += rim * (uSpec * 0.35 + 0.12) * vec3(0.55, 1.0, 0.75) * uActive;" +   // portal-green rim near the portal
+        " col += rim * 0.08;" +
+        " gl_FragColor = vec4(col, uColor.a);" +
         "}";
+
+    private static final String P_VS =
+        "uniform mat4 uMVP; uniform float uTime; uniform float uSize; uniform float uR;" +
+        "attribute vec3 aSeed; varying float vA;" +
+        "void main(){" +
+        " float life = fract(uTime * 0.33 + aSeed.x * 0.159);" +
+        " float a = aSeed.x + uTime * aSeed.z;" +
+        " float inward = step(0.62, fract(aSeed.x * 3.7));" +
+        " float r = (uR + aSeed.y) * mix(1.0, 0.15 + 0.85 * (1.0 - life), inward);" +
+        " vec3 p = vec3(cos(a) * r, sin(a) * r, (fract(aSeed.x * 7.3) - 0.5) * 0.03 * (1.0 - inward));" +
+        " gl_Position = uMVP * vec4(p, 1.0);" +
+        " gl_PointSize = uSize * (0.5 + fract(aSeed.x * 5.1)) / max(gl_Position.w, 0.05);" +
+        " vA = sin(life * 3.14159);" +
+        "}";
+    private static final String P_FS =
+        "precision mediump float; uniform vec3 uColor; uniform float uAlpha; varying float vA;" +
+        "void main(){ float d = length(gl_PointCoord - 0.5); float a = (1.0 - smoothstep(0.0, 0.5, d)) * vA * uAlpha;" +
+        " gl_FragColor = vec4(uColor * a, a); }";
 
     private int bgTex, bgProg, bgPos, bgUV, bgSampler;
     private FloatBuffer quad, quadUV;
     private int prog, aPos, aNormal, aUV, uMVP, uModel, uColor, uEmissive, uClip, uMode, uTime, uActive, uSpec, uLight, uCam;
-    private Mesh sphere, cyl, solidCyl, ring, ringGlow, disc, base, reticle, shadow;
-    private final float[] view = new float[16], proj = new float[16], vp = new float[16], mvp = new float[16], tmp = new float[16], tmp2 = new float[16];
+    private int pProg, pSeed, pMVP, pTime, pSize, pR, pColor, pAlpha, pVbo, pCount;
+    private Mesh sphere, ring, ringGlow, disc, reticle, glowDisc, notch, flashRing;
+    private final HandMesh remoteMesh = new HandMesh(true), occMesh = new HandMesh(false);
+    private final float[] view = new float[16], proj = new float[16], vp = new float[16], mvp = new float[16];
+    private final float[] tmp = new float[16], tmp2 = new float[16], ident = new float[16];
     private final float[] cam = new float[3];
-    private float time, active;
+    private float time, active, pointScale = 1;
+    private FloatBuffer planeBuf = ByteBuffer.allocateDirect(4 * 3 * 512).order(ByteOrder.nativeOrder()).asFloatBuffer();
     static final float[] NO_CLIP = {0, 0, 0, 1};
 
     int create() {
@@ -95,17 +133,42 @@ final class SceneRenderer {
         uLight = GLES20.glGetUniformLocation(prog, "uLight");
         uCam = GLES20.glGetUniformLocation(prog, "uCam");
 
-        sphere = Mesh.sphere(14, 18);
-        cyl = Mesh.cylinder(16);
-        solidCyl = Mesh.solidCylinder(24);
-        ring = Mesh.torus(R, 0.017f, 80, 16);
-        ringGlow = Mesh.torus(R - 0.013f, 0.0055f, 80, 8);
-        disc = Mesh.disc(R - 0.006f, 72);
-        base = Mesh.box(0.13f, 0.014f, 0.075f);
-        reticle = Mesh.flatRing(0.06f, 0.075f, 48);
-        shadow = Mesh.disc(1f, 32);
+        pProg = program(P_VS, P_FS);
+        pSeed = GLES20.glGetAttribLocation(pProg, "aSeed");
+        pMVP = GLES20.glGetUniformLocation(pProg, "uMVP");
+        pTime = GLES20.glGetUniformLocation(pProg, "uTime");
+        pSize = GLES20.glGetUniformLocation(pProg, "uSize");
+        pR = GLES20.glGetUniformLocation(pProg, "uR");
+        pColor = GLES20.glGetUniformLocation(pProg, "uColor");
+        pAlpha = GLES20.glGetUniformLocation(pProg, "uAlpha");
+        Random rnd = new Random(7);
+        pCount = 140;
+        float[] seeds = new float[pCount * 3];
+        for (int i = 0; i < pCount; i++) {
+            seeds[i * 3] = (float) (rnd.nextFloat() * Math.PI * 2);
+            seeds[i * 3 + 1] = (rnd.nextFloat() - 0.4f) * 0.035f;
+            seeds[i * 3 + 2] = (0.4f + rnd.nextFloat() * 1.1f) * (rnd.nextBoolean() ? 1 : 0.7f);
+        }
+        int[] b = new int[1];
+        GLES20.glGenBuffers(1, b, 0);
+        pVbo = b[0];
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, pVbo);
+        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, seeds.length * 4, fbuf(seeds), GLES20.GL_STATIC_DRAW);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+
+        sphere = Mesh.sphere(16, 20);
+        ring = Mesh.torus(R, 0.011f, 96, 16);
+        ringGlow = Mesh.torus(R - 0.012f, 0.0042f, 96, 8);
+        flashRing = Mesh.torus(R, 0.006f, 64, 6);
+        disc = Mesh.disc(R - 0.004f, 80);
+        reticle = Mesh.flatRing(0.06f, 0.072f, 48);
+        glowDisc = Mesh.disc(1f, 40);
+        notch = Mesh.box(0.012f, 0.026f, 0.014f);
+        Matrix.setIdentityM(ident, 0);
         return bgTex;
     }
+
+    void setViewportHeight(int h) { pointScale = h / 1000f; }
 
     void drawBackground(Frame frame) {
         if (frame.hasDisplayGeometryChanged()) {
@@ -138,17 +201,21 @@ final class SceneRenderer {
         Matrix.multiplyMM(vp, 0, proj, 0, view, 0);
         cam[0] = camPos[0]; cam[1] = camPos[1]; cam[2] = camPos[2];
         time = t; active = act;
-        GLES20.glUseProgram(prog);
+        useMain();
         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
         GLES20.glDisable(GLES20.GL_CULL_FACE);
-        float lx = 0.3f, ly = 1f, lz = 0.45f, l = (float) Math.sqrt(lx * lx + ly * ly + lz * lz);
+    }
+
+    private void useMain() {
+        GLES20.glUseProgram(prog);
+        float lx = 0.3f, ly = 1f, lz = 0.55f, l = (float) Math.sqrt(lx * lx + ly * ly + lz * lz);
         GLES20.glUniform3f(uLight, lx / l, ly / l, lz / l);
         GLES20.glUniform3f(uCam, cam[0], cam[1], cam[2]);
         GLES20.glUniform1f(uTime, time);
         GLES20.glUniform1f(uActive, active);
     }
 
-    private void draw(Mesh m, float[] model, float r, float g, float b, float a, float er, float eg, float eb, int mode, float[] clip, float spec) {
+    private void setCommon(float[] model, float r, float g, float b, float a, float er, float eg, float eb, int mode, float[] clip, float spec) {
         Matrix.multiplyMM(mvp, 0, vp, 0, model, 0);
         GLES20.glUniformMatrix4fv(uMVP, 1, false, mvp, 0);
         GLES20.glUniformMatrix4fv(uModel, 1, false, model, 0);
@@ -157,124 +224,167 @@ final class SceneRenderer {
         GLES20.glUniform4f(uClip, clip[0], clip[1], clip[2], clip[3]);
         GLES20.glUniform1i(uMode, mode);
         GLES20.glUniform1f(uSpec, spec);
+    }
+
+    private void draw(Mesh m, float[] model, float r, float g, float b, float a, float er, float eg, float eb, int mode, float[] clip, float spec) {
+        setCommon(model, r, g, b, a, er, eg, eb, mode, clip, spec);
         m.draw(aPos, aNormal, aUV);
     }
 
-    /** portalM: world matrix of the ring centre (+Z faces the player). */
-    void drawPortal(float[] portalM, float[] floorM, float glowPulse) {
-        // soft shadow on the table
-        GLES20.glEnable(GLES20.GL_BLEND);
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
-        GLES20.glDepthMask(false);
-        Matrix.setRotateM(tmp, 0, -90, 1, 0, 0);
-        Matrix.scaleM(tmp, 0, 0.11f, 0.06f, 1);
-        Matrix.multiplyMM(tmp2, 0, floorM, 0, tmp, 0);
-        Matrix.translateM(tmp2, 0, 0, 0, 0.002f);
-        draw(shadow, tmp2, 0, 0, 0, 0.45f, 0, 0, 0, 2, NO_CLIP, 0);
-        GLES20.glDepthMask(true);
-        GLES20.glDisable(GLES20.GL_BLEND);
+    private void blend(boolean on, boolean additive) {
+        if (on) {
+            GLES20.glEnable(GLES20.GL_BLEND);
+            if (additive) GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE);
+            else GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
+            GLES20.glDepthMask(false);
+        } else {
+            GLES20.glDisable(GLES20.GL_BLEND);
+            GLES20.glDepthMask(true);
+        }
+    }
 
-        draw(ring, portalM, 0.6f, 0.64f, 0.66f, 1, 0, 0, 0, 0, NO_CLIP, 0.9f);
-        float gi = 0.75f + glowPulse;
-        draw(ringGlow, portalM, 0.05f, 0.4f, 0.2f, 1, 0.1f * gi, 1.0f * gi, 0.48f * gi, 0, NO_CLIP, 0);
-        draw(disc, portalM, 1, 1, 1, 1, 0, 0, 0, 1, NO_CLIP, 0);
-        // neck + base
-        System.arraycopy(portalM, 0, tmp, 0, 16);
-        Matrix.translateM(tmp, 0, 0, -R - 0.017f, 0);
-        Matrix.scaleM(tmp, 0, 0.014f, 0.03f, 0.014f);
-        draw(solidCyl, tmp, 0.6f, 0.64f, 0.66f, 1, 0, 0, 0, 0, NO_CLIP, 0.9f);
-        System.arraycopy(portalM, 0, tmp, 0, 16);
-        Matrix.translateM(tmp, 0, 0, -R - 0.033f, 0);
-        draw(base, tmp, 0.55f, 0.59f, 0.61f, 1, 0, 0, 0, 0, NO_CLIP, 0.9f);
+    /* ------------------------------ surfaces + placement ------------------------------ */
+
+    /** Dots on a detected surface. poly: x,z pairs in plane space; centerM: plane centre pose matrix. */
+    void drawPlane(float[] centerM, FloatBuffer poly) {
+        int n = poly.limit() / 2;
+        if (n < 3 || n > 500) return;
+        planeBuf.clear();
+        for (int i = 0; i < n; i++) { planeBuf.put(poly.get(i * 2)); planeBuf.put(0); planeBuf.put(poly.get(i * 2 + 1)); }
+        planeBuf.position(0);
+        blend(true, false);
+        setCommon(centerM, 1, 1, 1, 0.55f, 0, 0, 0, 4, NO_CLIP, 0);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
+        GLES20.glEnableVertexAttribArray(aPos);
+        GLES20.glVertexAttribPointer(aPos, 3, GLES20.GL_FLOAT, false, 0, planeBuf);
+        GLES20.glDisableVertexAttribArray(aNormal);
+        GLES20.glVertexAttrib3f(aNormal, 0, 1, 0);
+        GLES20.glDisableVertexAttribArray(aUV);
+        GLES20.glVertexAttrib2f(aUV, 0, 0);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, n);
+        GLES20.glDisableVertexAttribArray(aPos);
+        blend(false, false);
     }
 
     void drawReticle(float[] poseM) {
-        draw(reticle, poseM, 0.2f, 1f, 0.6f, 1, 0.1f, 0.6f, 0.3f, 0, NO_CLIP, 0);
+        Matrix.translateM(tmp, 0, poseM, 0, 0, 0.003f, 0);
+        draw(reticle, tmp, 0.2f, 1f, 0.6f, 1, 0.15f, 0.9f, 0.45f, 0, NO_CLIP, 0);
     }
 
-    private static final float[] JOINT_R = {0.021f, 0.015f, 0.0125f, 0.011f, 0.0095f, 0.0115f, 0.0105f, 0.0095f, 0.0085f,
-        0.012f, 0.011f, 0.0098f, 0.0088f, 0.0112f, 0.0102f, 0.0092f, 0.0084f, 0.0102f, 0.0092f, 0.0084f, 0.0078f};
-    private static final int[][] LINKS = {{0, 1}, {1, 2}, {2, 3}, {3, 4}, {0, 5}, {5, 6}, {6, 7}, {7, 8}, {5, 9}, {9, 10}, {10, 11}, {11, 12},
-        {9, 13}, {13, 14}, {14, 15}, {15, 16}, {13, 17}, {17, 18}, {18, 19}, {19, 20}, {0, 17}};
+    /** Faint outline where the portal will appear in the air. */
+    void drawGhost(float[] portalM) {
+        blend(true, false);
+        float s = 1 + 0.03f * (float) Math.sin(time * 3);
+        Matrix.scaleM(tmp, 0, portalM, 0, s, s, s);
+        draw(flashRing, tmp, 0, 0, 0, 0.55f, 0.15f, 0.8f, 0.45f, 3, NO_CLIP, 0);
+        blend(false, false);
+    }
+
+    /* ------------------------------ portal ------------------------------ */
 
     /**
-     * Cartoon hand from 21 WORLD points. occluder = depth only (hides the swirl where my real hand is
-     * still in front of the portal). clip = world plane; only the positive side is drawn.
+     * open: 0 = closed seed, 1 = fully open. spin: ring rotation (degrees). flash: 0..1 opening shockwave.
+     * floorM: matrix on the surface below (null when floating in the air).
      */
-    void drawHand(float[] p, float inflate, boolean occluder, float[] clip) {
-        if (occluder) GLES20.glColorMask(false, false, false, false);
-        float sr = 0.96f, sg = 0.77f, sb = 0.63f;
-        for (int i = 0; i < 21; i++) {
-            float r = JOINT_R[i] * inflate;
-            Matrix.setIdentityM(tmp, 0);
-            Matrix.translateM(tmp, 0, p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
-            Matrix.scaleM(tmp, 0, r, r, r);
-            draw(sphere, tmp, sr, sg, sb, 1, 0, 0, 0, 0, clip, 0.25f);
+    void drawPortalOpaque(float[] portalM, float open, float spin) {
+        if (open < 0.02f) {
+            float pulse = 1 + 0.18f * (float) Math.sin(time * 5);
+            Matrix.scaleM(tmp, 0, portalM, 0, 0.016f * pulse, 0.016f * pulse, 0.016f * pulse);
+            draw(sphere, tmp, 0.1f, 0.5f, 0.3f, 1, 0.3f, 1.3f, 0.7f, 0, NO_CLIP, 0);
+            return;
         }
-        for (int[] l : LINKS) {
-            float r = Math.min(JOINT_R[l[0]], JOINT_R[l[1]]) * inflate;
-            if (segment(p, l[0], l[1], r, r)) draw(cyl, tmp, sr, sg, sb, 1, 0, 0, 0, 0, clip, 0.25f);
+        // metal ring with running energy, rotating in its plane
+        Matrix.rotateM(tmp2, 0, portalM, 0, spin, 0, 0, 1);
+        Matrix.scaleM(tmp, 0, tmp2, 0, open, open, open);
+        draw(ring, tmp, 0.18f, 0.2f, 0.21f, 1, 0, 0, 0, 0, NO_CLIP, 1.0f);
+        float g = 0.9f + active * 0.9f;
+        draw(ringGlow, tmp, 0, 0, 0, 1, 0.12f * g, 1.0f * g, 0.5f * g, 3, NO_CLIP, 0);
+        // little runes around the ring turning the other way
+        for (int i = 0; i < 8; i++) {
+            Matrix.rotateM(tmp2, 0, portalM, 0, -spin * 0.6f + i * 45f, 0, 0, 1);
+            Matrix.scaleM(tmp2, 0, open, open, open);
+            Matrix.translateM(tmp, 0, tmp2, 0, R + 0.017f, 0, 0);
+            draw(notch, tmp, 0.25f, 0.27f, 0.28f, 1, 0.05f * g, 0.45f * g, 0.22f * g, 0, NO_CLIP, 0.8f);
         }
-        // palm: flattened ellipsoid spanning wrist and knuckles
-        float[] a1 = sub(p, 9, 0), a2 = sub(p, 5, 17);
-        float l1 = len(a1), l2 = len(a2);
-        if (l1 > 1e-4f && l2 > 1e-4f) {
-            norm(a1);
-            float d = dot(a2, a1);
-            a2[0] -= a1[0] * d; a2[1] -= a1[1] * d; a2[2] -= a1[2] * d;
-            norm(a2);
-            float[] a3 = cross(a1, a2);
-            float cx = 0, cy = 0, cz = 0;
-            int[] ids = {0, 5, 9, 13, 17, 9};
-            for (int id : ids) { cx += p[id * 3]; cy += p[id * 3 + 1]; cz += p[id * 3 + 2]; }
-            cx /= ids.length; cy /= ids.length; cz /= ids.length;
-            float hl = l1 * 0.58f, hw = l2 * 0.62f + 0.008f, ht = 0.0135f * inflate;
-            hw *= inflate; hl *= (1 + (inflate - 1) * 0.5f);
-            float[] m = {a2[0] * hw, a2[1] * hw, a2[2] * hw, 0, a1[0] * hl, a1[1] * hl, a1[2] * hl, 0, a3[0] * ht, a3[1] * ht, a3[2] * ht, 0, cx, cy, cz, 1};
-            draw(sphere, m, sr, sg, sb, 1, 0, 0, 0, 0, clip, 0.25f);
+    }
+
+    void drawPortalTransparent(float[] portalM, float[] floorM, float open, float spin, float flash) {
+        if (floorM != null) {
+            blend(true, false);
+            Matrix.rotateM(tmp, 0, floorM, 0, -90, 1, 0, 0);
+            Matrix.scaleM(tmp, 0, 0.14f, 0.07f, 1);
+            Matrix.translateM(tmp, 0, 0, 0, 0.002f);
+            draw(glowDisc, tmp, 0, 0, 0, 0.35f, 0, 0, 0, 2, NO_CLIP, 0);
+            blend(true, true);
+            Matrix.rotateM(tmp, 0, floorM, 0, -90, 1, 0, 0);
+            float gs = 0.06f + 0.12f * open;
+            Matrix.scaleM(tmp, 0, gs, gs * 0.55f, 1);
+            Matrix.translateM(tmp, 0, 0, 0, 0.003f);
+            draw(glowDisc, tmp, 0.1f * (0.4f + open), 0.6f * (0.4f + open), 0.35f * (0.4f + open), 1, 0, 0, 0, 2, NO_CLIP, 0);
         }
-        if (!occluder) {
-            // white cuff at the wrist
-            float[] d = sub(p, 9, 0);
-            if (len(d) > 1e-4f) {
-                norm(d);
-                float[] w0 = {p[0] - d[0] * 0.03f, p[1] - d[1] * 0.03f, p[2] - d[2] * 0.03f};
-                axisMatrix(w0, d, 0.034f * inflate, 0.045f, 0.034f * inflate);
-                draw(solidCyl, tmp, 0.97f, 0.97f, 0.97f, 1, 0, 0, 0, 0, clip, 0.2f);
+        if (open >= 0.02f) {
+            blend(true, false);
+            Matrix.rotateM(tmp2, 0, portalM, 0, spin * 1.5f, 0, 0, 1);
+            Matrix.scaleM(tmp, 0, tmp2, 0, open, open, open);
+            draw(disc, tmp, 1, 1, 1, Math.min(1, open * 1.2f), 0, 0, 0, 1, NO_CLIP, 0);
+            if (flash > 0) {
+                blend(true, true);
+                float s = open * (1 + (1 - flash) * 0.9f);
+                Matrix.scaleM(tmp, 0, portalM, 0, s, s, s);
+                draw(flashRing, tmp, 0, 0, 0, 1, 0.3f * flash, 1.2f * flash, 0.7f * flash, 3, NO_CLIP, 0);
             }
         }
-        if (occluder) GLES20.glColorMask(true, true, true, true);
+        // particles (also around the closed seed)
+        float ps = open < 0.02f ? 0.12f : open;
+        Matrix.scaleM(tmp, 0, portalM, 0, ps, ps, ps);
+        drawParticles(tmp, open < 0.02f ? 0.8f : 0.6f + 0.6f * active);
+        blend(false, false);
+        useMain();
     }
 
-    /** Fills tmp with a cylinder transform from point a to point b. */
-    private boolean segment(float[] p, int a, int b, float r, float r2) {
-        float[] d = sub(p, b, a);
-        float L = len(d);
-        if (L < 1e-5f) return false;
-        d[0] /= L; d[1] /= L; d[2] /= L;
-        float[] mid = {(p[a * 3] + p[b * 3]) / 2, (p[a * 3 + 1] + p[b * 3 + 1]) / 2, (p[a * 3 + 2] + p[b * 3 + 2]) / 2};
-        axisMatrix(mid, d, r, L, r2);
-        return true;
+    private void drawParticles(float[] model, float alpha) {
+        Matrix.multiplyMM(mvp, 0, vp, 0, model, 0);
+        GLES20.glEnable(GLES20.GL_BLEND);
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE);
+        GLES20.glDepthMask(false);
+        GLES20.glUseProgram(pProg);
+        GLES20.glUniformMatrix4fv(pMVP, 1, false, mvp, 0);
+        GLES20.glUniform1f(pTime, time);
+        GLES20.glUniform1f(pSize, 22f * pointScale);
+        GLES20.glUniform1f(pR, R);
+        GLES20.glUniform3f(pColor, 0.45f, 1.0f, 0.7f);
+        GLES20.glUniform1f(pAlpha, alpha);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, pVbo);
+        GLES20.glEnableVertexAttribArray(pSeed);
+        GLES20.glVertexAttribPointer(pSeed, 3, GLES20.GL_FLOAT, false, 0, 0);
+        GLES20.glDrawArrays(GLES20.GL_POINTS, 0, pCount);
+        GLES20.glDisableVertexAttribArray(pSeed);
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0);
     }
 
-    /** tmp = translate(c) * rotate(Y -> dir) * scale(sx, sy, sz). */
-    private void axisMatrix(float[] c, float[] dir, float sx, float sy, float sz) {
-        Matrix.setIdentityM(tmp, 0);
-        Matrix.translateM(tmp, 0, c[0], c[1], c[2]);
-        // axis = Y x dir, angle = acos(Y . dir)
-        float ax = dir[2], ay = 0, az = -dir[0];
-        float s = (float) Math.sqrt(ax * ax + az * az);
-        float ang = (float) Math.toDegrees(Math.atan2(s, dir[1]));
-        if (s > 1e-6f) Matrix.rotateM(tmp, 0, ang, ax / s, ay, az / s);
-        else if (dir[1] < 0) Matrix.rotateM(tmp, 0, 180, 1, 0, 0);
-        Matrix.scaleM(tmp, 0, sx, sy, sz);
+    /* ------------------------------ hands ------------------------------ */
+
+    /** Opponent's hand: smooth skin + white sleeve, clipped at the portal face. */
+    void drawHand(float[] worldPts, float[] clip) {
+        remoteMesh.update(worldPts, 1f);
+        remoteMesh.upload();
+        setCommon(ident, 0.95f, 0.74f, 0.6f, 1, 0.03f, 0.012f, 0.008f, 0, clip, 0.22f);
+        remoteMesh.draw(aPos, aNormal, aUV, 0, remoteMesh.skinIdxCount);
+        setCommon(ident, 0.93f, 0.95f, 0.96f, 1, 0, 0, 0, 0, clip, 0.15f);
+        remoteMesh.draw(aPos, aNormal, aUV, remoteMesh.sleeveIdxStart, remoteMesh.sleeveIdxCount);
     }
 
-    private static float[] sub(float[] p, int a, int b) { return new float[]{p[a * 3] - p[b * 3], p[a * 3 + 1] - p[b * 3 + 1], p[a * 3 + 2] - p[b * 3 + 2]}; }
-    private static float len(float[] v) { return (float) Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
-    private static void norm(float[] v) { float l = len(v); if (l > 0) { v[0] /= l; v[1] /= l; v[2] /= l; } }
-    private static float dot(float[] a, float[] b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-    private static float[] cross(float[] a, float[] b) { return new float[]{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; }
+    /** My hand, depth only: the swirl is not drawn over the part of my real hand still in front of the portal. */
+    void drawOccluder(float[] worldPts, float[] clip) {
+        occMesh.update(worldPts, 1.45f);
+        occMesh.upload();
+        GLES20.glColorMask(false, false, false, false);
+        setCommon(ident, 0, 0, 0, 1, 0, 0, 0, 0, clip, 0);
+        occMesh.draw(aPos, aNormal, aUV, 0, occMesh.skinIdxCount);
+        GLES20.glColorMask(true, true, true, true);
+    }
+
+    /* ------------------------------ GL helpers ------------------------------ */
 
     private static FloatBuffer fbuf(float[] a) {
         FloatBuffer f = ByteBuffer.allocateDirect(a.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();

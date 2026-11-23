@@ -68,7 +68,7 @@ jobs:
       - name: Collect APK
         id: out
         run: |
-          NAME="PortalRPS-v2.0.${VERSION_CODE}.apk"
+          NAME="PortalRPS-v3.0.${VERSION_CODE}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$NAME"
           echo "apk=$NAME" >> "$GITHUB_OUTPUT"
           echo "## APK: $NAME ($(du -h "$NAME" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
@@ -81,8 +81,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.${{ github.run_number }}
-          name: פורטל אבן נייר v2.0.${{ github.run_number }}
+          tag_name: v3.0.${{ github.run_number }}
+          name: פורטל אבן נייר v3.0.${{ github.run_number }}
           body: |
             אפליקציית אנדרואיד נייטיב (ARCore + זיהוי יד במכשיר).
             להתקנה: מורידים את קובץ ה-APK בטלפון ופותחים אותו.

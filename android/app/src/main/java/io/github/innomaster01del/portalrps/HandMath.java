@@ -55,20 +55,35 @@ public final class HandMath {
         return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    private static float angleDeg(float[] p, int a, int b, int c, int d) {
+        float ux = p[b * 3] - p[a * 3], uy = p[b * 3 + 1] - p[a * 3 + 1], uz = p[b * 3 + 2] - p[a * 3 + 2];
+        float vx = p[d * 3] - p[c * 3], vy = p[d * 3 + 1] - p[c * 3 + 1], vz = p[d * 3 + 2] - p[c * 3 + 2];
+        double lu = Math.sqrt(ux * ux + uy * uy + uz * uz), lv = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        if (lu < 1e-6 || lv < 1e-6) return 90;
+        double cos = (ux * vx + uy * vy + uz * vz) / (lu * lv);
+        return (float) Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, cos))));
+    }
+
+    /**
+     * Finger state from joint angles (independent of hand size, distance and rotation):
+     * 1 = straight, -1 = curled, 0 = unclear. f: 0 index, 1 middle, 2 ring, 3 pinky.
+     */
+    public static int fingerState(float[] p, int f) {
+        int m = 5 + f * 4, pip = m + 1, tip = m + 3;
+        float bend = angleDeg(p, m, pip, pip, tip);      // how bent the finger is
+        float align = angleDeg(p, 0, m, m, tip);         // does it point away from the wrist
+        float reach = dist(p, tip, 0) / Math.max(dist(p, m, 0), 1e-6f);
+        if (bend < 50 && align < 50 && reach > 1.45f) return 1;
+        if (bend > 75 || align > 85 || reach < 1.25f) return -1;
+        return 0;
+    }
+
     /** Rock / paper / scissors from 21 3D points (any frame, any scale). null when unclear. */
     public static String classify(float[] p) {
-        float palm = Math.max(dist(p, 0, 9), 1e-6f);
-        boolean[] ext = new boolean[4];
-        int n = 0;
-        int[] tips = {8, 12, 16, 20};
-        for (int i = 0; i < 4; i++) {
-            int tip = tips[i];
-            ext[i] = dist(p, tip, 0) > dist(p, tip - 2, 0) * 1.12f && dist(p, tip, 0) > palm * 1.45f;
-            if (ext[i]) n++;
-        }
-        if (ext[0] && ext[1] && !ext[2] && !ext[3]) return SCISSORS;
-        if (n >= 4 || (n == 3 && ext[2])) return PAPER;
-        if (n == 0) return ROCK;
+        int i = fingerState(p, 0), m = fingerState(p, 1), r = fingerState(p, 2), k = fingerState(p, 3);
+        if (i == 1 && m == 1 && r == -1) return SCISSORS;          // pinky ignored: often half-bent
+        if (i == 1 && m == 1 && r == 1) return PAPER;               // pinky ignored too
+        if (i == -1 && m == -1 && r == -1 && k != 1) return ROCK;
         return null;
     }
 

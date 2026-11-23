@@ -27,7 +27,19 @@ final class Net {
     }
 
     private static final String TAG = "Net";
-    static final String BROKER = "tcp://broker.hivemq.com:1883";
+    /**
+     * Tried in order until one connects. Same broker first over three transports, because both phones
+     * must end up on the same broker: secure WebSocket (port 8884, rarely blocked), plain TCP 1883
+     * (often blocked on filtered/mobile networks), plain WebSocket 8000. Then a second broker.
+     */
+    static final String[] BROKERS = {
+        "wss://broker.hivemq.com:8884/mqtt",
+        "tcp://broker.hivemq.com:1883",
+        "ws://broker.hivemq.com:8000/mqtt",
+        "wss://broker.emqx.io:8084/mqtt",
+        "tcp://broker.emqx.io:1883",
+    };
+    volatile String connectedVia;
     private static final String TOPIC_PREFIX = "portalrps/v1/room/";
 
     final String code;
@@ -48,39 +60,48 @@ final class Net {
     private String topic() { return TOPIC_PREFIX + code; }
 
     private void connect() {
-        try {
-            MqttClient c = new MqttClient(BROKER, "prps-" + myId, new MemoryPersistence());
-            c.setCallback(new MqttCallbackExtended() {
-                @Override public void connectComplete(boolean reconnect, String uri) {
-                    try { c.subscribe(topic(), 0); } catch (Exception e) { Log.w(TAG, "subscribe", e); }
-                    listener.onConnState(true, null);
-                }
-                @Override public void connectionLost(Throwable cause) { listener.onConnState(false, "החיבור לשרת נותק, מתחבר מחדש…"); }
-                @Override public void messageArrived(String t, MqttMessage msg) {
-                    try {
-                        JSONObject j = new JSONObject(new String(msg.getPayload(), StandardCharsets.UTF_8));
-                        if (myId.equals(j.optString("from"))) return;
-                        listener.onMessage(j);
-                    } catch (Exception e) { Log.w(TAG, "bad message", e); }
-                }
-                @Override public void deliveryComplete(IMqttDeliveryToken token) {}
-            });
-            MqttConnectOptions o = new MqttConnectOptions();
-            o.setCleanSession(true);
-            o.setAutomaticReconnect(true);
-            o.setKeepAliveInterval(20);
-            o.setConnectionTimeout(10);
-            c.connect(o);
-            client = c;
-            c.subscribe(topic(), 0);
-            listener.onConnState(true, null);
-        } catch (Exception e) {
-            Log.w(TAG, "connect", e);
-            listener.onConnState(false, "אין חיבור לשרת המשחק. בדוק אינטרנט.");
-            if (!closed) {
-                try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
-                if (!closed) out.execute(this::connect);
+        StringBuilder errs = new StringBuilder();
+        for (String uri : BROKERS) {
+            if (closed) return;
+            try {
+                MqttClient c = new MqttClient(uri, "prps-" + myId, new MemoryPersistence());
+                c.setCallback(new MqttCallbackExtended() {
+                    @Override public void connectComplete(boolean reconnect, String u) {
+                        try { c.subscribe(topic(), 0); } catch (Exception e) { Log.w(TAG, "subscribe", e); }
+                        listener.onConnState(true, null);
+                    }
+                    @Override public void connectionLost(Throwable cause) { listener.onConnState(false, "החיבור נותק, מתחבר מחדש…"); }
+                    @Override public void messageArrived(String t, MqttMessage msg) {
+                        try {
+                            JSONObject j = new JSONObject(new String(msg.getPayload(), StandardCharsets.UTF_8));
+                            if (myId.equals(j.optString("from"))) return;
+                            listener.onMessage(j);
+                        } catch (Exception e) { Log.w(TAG, "bad message", e); }
+                    }
+                    @Override public void deliveryComplete(IMqttDeliveryToken token) {}
+                });
+                MqttConnectOptions o = new MqttConnectOptions();
+                o.setCleanSession(true);
+                o.setAutomaticReconnect(true);
+                o.setKeepAliveInterval(20);
+                o.setConnectionTimeout(8);
+                c.connect(o);
+                c.subscribe(topic(), 0);
+                client = c;
+                connectedVia = uri;
+                Log.i(TAG, "connected via " + uri);
+                listener.onConnState(true, null);
+                return;
+            } catch (Exception e) {
+                Log.w(TAG, "connect failed: " + uri, e);
+                String why = e.getCause() != null ? e.getCause().getClass().getSimpleName() : e.getClass().getSimpleName();
+                errs.append(uri.substring(0, uri.indexOf(':'))).append(':').append(why).append(' ');
             }
+        }
+        listener.onConnState(false, "אין חיבור לשרת המשחק (" + errs.toString().trim() + ")");
+        if (!closed) {
+            try { Thread.sleep(4000); } catch (InterruptedException ignored) {}
+            if (!closed) out.execute(this::connect);
         }
     }
 

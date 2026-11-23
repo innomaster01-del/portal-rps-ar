@@ -10,6 +10,18 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <ImageView
+        android:id="@+id/debugView"
+        android:layout_width="120dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="12dp"
+        android:layout_marginBottom="90dp"
+        android:adjustViewBounds="true"
+        android:background="#66000000"
+        android:contentDescription="מה המצלמה מזהה"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/overlay"
         android:layout_width="match_parent"
@@ -133,13 +145,22 @@
                         android:textSize="14.5sp" />
 
                     <Button
-                        android:id="@+id/createBtn"
+                        android:id="@+id/soloBtn"
                         style="@style/Btn.Primary"
                         android:layout_width="match_parent"
                         android:layout_marginStart="0dp"
                         android:layout_marginTop="14dp"
                         android:layout_marginEnd="0dp"
-                        android:text="צור חדר" />
+                        android:text="🤖 שחק נגד המחשב" />
+
+                    <Button
+                        android:id="@+id/createBtn"
+                        style="@style/Btn"
+                        android:layout_width="match_parent"
+                        android:layout_marginStart="0dp"
+                        android:layout_marginTop="8dp"
+                        android:layout_marginEnd="0dp"
+                        android:text="👥 צור חדר עם חבר" />
 
                     <LinearLayout
                         android:id="@+id/roomInfo"
@@ -215,12 +236,12 @@
                     </LinearLayout>
 
                     <CheckBox
-                        android:id="@+id/soloChk"
+                        android:id="@+id/debugChk"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:buttonTint="#4DFF9A"
-                        android:text="שחק נגד המחשב (בלי חבר)"
+                        android:text="הצג מה המצלמה מזהה"
                         android:textColor="#A9BDB2" />
 
                     <CheckBox
@@ -238,7 +259,7 @@
                         android:layout_marginStart="0dp"
                         android:layout_marginTop="8dp"
                         android:layout_marginEnd="0dp"
-                        android:text="סגור ושחק" />
+                        android:text="סגור" />
                 </LinearLayout>
             </ScrollView>
         </FrameLayout>

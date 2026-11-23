@@ -3,6 +3,7 @@ package io.github.innomaster01del.portalrps;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.opengl.GLES20;
@@ -20,6 +21,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -41,6 +43,7 @@ import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationExceptio
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
@@ -56,16 +59,18 @@ import static io.github.innomaster01del.portalrps.HandMath.SCISSORS;
 public class MainActivity extends AppCompatActivity implements GLSurfaceView.Renderer, HandTracker.Listener, Net.Listener {
     private static final String TAG = "PortalRPS";
     private static final float PORTAL_R = SceneRenderer.R;
+    private static final float AIR_DIST = 0.6f;      // in-air placement distance in front of the phone (m)
     private static final int REQ_CAMERA = 7;
-    private static final long BEAT_MS = 700, WINDOW_BEFORE = 150, WINDOW_AFTER = 600, RESULT_MS = 3200;
+    private static final long BEAT_MS = 700, WINDOW_BEFORE = 150, WINDOW_AFTER = 600, RESULT_MS = 3200, OPEN_MS = 1100;
 
     // ---------------- views (main thread) ----------------
     private GLSurfaceView glView;
     private TextView statusTv, netChip, handChip, scoreChip, bannerTitle, bannerSub, hintTv, roomCodeTv;
     private View banner, lobby, roomInfo, manualBar;
     private Button moveBtn, openLobbyBtn, mInBtn, gRock, gPaper, gScissors;
+    private ImageView debugView;
     private EditText codeIn;
-    private CheckBox soloChk, manualChk;
+    private CheckBox manualChk, debugChk;
     private Vibrator vibrator;
 
     // ---------------- AR ----------------
@@ -82,29 +87,38 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private static final int PLACING = 0, PLACED = 1;
     private volatile int mode = PLACING;
     private Anchor anchor;
+    private boolean floating;
     private float yaw;
-    private final float[] portalM = new float[16], portalInv = new float[16], floorM = new float[16], reticleM = new float[16];
-    private final float[] viewM = new float[16], projM = new float[16], clip = new float[4];
+    private final float[] portalM = new float[16], portalInv = new float[16], floorM = new float[16], reticleM = new float[16], ghostM = new float[16];
+    private final float[] viewM = new float[16], projM = new float[16], clip = new float[4], planeM = new float[16];
     private HitResult reticleHit;
     private boolean reticleOk, tracking;
     private final long t0 = SystemClock.uptimeMillis();
     private long lastFrame;
-    private float glowActive;
+    private float glowActive, spin;
+
+    // portal opening
+    private boolean portalOpening, portalOpen;
+    private long openStart, palmSince, placedAt;
+    private float openAmt, flash;
 
     // my hand (portal-local)
     private final Object handLock = new Object();
     private float[] pendingWorld; private int pendingSeq, consumedSeq; private float pendingDist;
     private final float[] myLocal = new float[63], tmp4 = new float[4], tmp4b = new float[4];
+    private final OneEuro myFilter = new OneEuro(1.2, 12, 1.0);
+    private final ArrayDeque<String> gestureHistory = new ArrayDeque<>();
     private boolean myHas, myInside; private long myLast; private String myGesture; private float myDist;
     private long lastSubmit, lastSend; private boolean sentInside;
 
     // opponent hand (portal-local, my frame)
     private final float[] remTarget = new float[63], remCur = new float[63];
+    private final OneEuro remFilter = new OneEuro(1.0, 8, 1.0);
     private long remLast; private boolean remShown;
 
     // room
     private volatile Net net;
-    private volatile boolean solo, manualPref, brokerUp;
+    private volatile boolean solo, manualPref, brokerUp, lobbyAutoClosed;
     private volatile String netError;
     private long oppSeen, lastHi, joinStarted;
     private final ConcurrentLinkedQueue<JSONObject> inbox = new ConcurrentLinkedQueue<>();
@@ -120,9 +134,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private volatile boolean manualInside; private volatile String manualGesture = ROCK;
 
     // UI shown (GL thread computes, main thread applies)
-    private String uiStatus = "", uiHint = "", uiHand = "", uiScore = "", uiNet = "לא מחובר";
+    private String uiHint = "";
     private String bTitle = "", bSub = "", bCls = "";
-    private boolean uiHandHot, uiManual, uiMove, uiBanner;
+    private boolean uiBanner;
     private String shownKey = "";
 
     /* =============================== lifecycle =============================== */
@@ -137,8 +151,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         scoreChip = findViewById(R.id.scoreChip); banner = findViewById(R.id.banner); bannerTitle = findViewById(R.id.bannerTitle);
         bannerSub = findViewById(R.id.bannerSub); hintTv = findViewById(R.id.hint); lobby = findViewById(R.id.lobby);
         roomInfo = findViewById(R.id.roomInfo); roomCodeTv = findViewById(R.id.roomCode); codeIn = findViewById(R.id.codeIn);
-        soloChk = findViewById(R.id.soloChk); manualChk = findViewById(R.id.manualChk); manualBar = findViewById(R.id.manualBar);
-        moveBtn = findViewById(R.id.moveBtn); openLobbyBtn = findViewById(R.id.openLobbyBtn);
+        manualChk = findViewById(R.id.manualChk); debugChk = findViewById(R.id.debugChk); manualBar = findViewById(R.id.manualBar);
+        moveBtn = findViewById(R.id.moveBtn); openLobbyBtn = findViewById(R.id.openLobbyBtn); debugView = findViewById(R.id.debugView);
         mInBtn = findViewById(R.id.mIn); gRock = findViewById(R.id.gRock); gPaper = findViewById(R.id.gPaper); gScissors = findViewById(R.id.gScissors);
 
         glView.setPreserveEGLContextOnPause(true);
@@ -150,19 +164,24 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             float dx, dy;
             @Override public boolean onTouch(View v, MotionEvent e) {
                 if (e.getAction() == MotionEvent.ACTION_DOWN) { dx = e.getX(); dy = e.getY(); }
-                else if (e.getAction() == MotionEvent.ACTION_UP && Math.hypot(e.getX() - dx, e.getY() - dy) < 30) { taps.add(new float[]{e.getX(), e.getY()}); v.performClick(); }
+                else if (e.getAction() == MotionEvent.ACTION_UP && Math.hypot(e.getX() - dx, e.getY() - dy) < 40) { taps.add(new float[]{e.getX(), e.getY()}); v.performClick(); }
                 return true;
             }
         });
 
+        findViewById(R.id.soloBtn).setOnClickListener(v -> startSolo());
         findViewById(R.id.createBtn).setOnClickListener(v -> createRoom());
         findViewById(R.id.joinBtn).setOnClickListener(v -> joinRoom(codeIn.getText().toString()));
         findViewById(R.id.shareBtn).setOnClickListener(v -> shareCode());
-        findViewById(R.id.closeLobbyBtn).setOnClickListener(v -> { lobby.setVisibility(View.GONE); openLobbyBtn.setVisibility(View.VISIBLE); });
+        findViewById(R.id.closeLobbyBtn).setOnClickListener(v -> closeLobby());
         openLobbyBtn.setOnClickListener(v -> { lobby.setVisibility(View.VISIBLE); openLobbyBtn.setVisibility(View.GONE); });
         moveBtn.setOnClickListener(v -> moveRequested = true);
-        soloChk.setOnCheckedChangeListener((c, on) -> { solo = on; if (on) closeNet(); resetRequested = true; });
         manualChk.setOnCheckedChangeListener((c, on) -> manualPref = on);
+        debugChk.setOnCheckedChangeListener((c, on) -> {
+            HandTracker tr = tracker;
+            if (tr != null) tr.debug = on;
+            if (!on) debugView.setVisibility(View.GONE);
+        });
         mInBtn.setOnClickListener(v -> manualInside = !manualInside);
         gRock.setOnClickListener(v -> { manualGesture = ROCK; manualInside = true; });
         gPaper.setOnClickListener(v -> { manualGesture = PAPER; manualInside = true; });
@@ -189,6 +208,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 cfg.setLightEstimationMode(Config.LightEstimationMode.DISABLED);
                 session.configure(cfg);
                 tracker = new HandTracker(this, sensorRotation(), this);
+                tracker.debug = debugChk.isChecked();
             } catch (UnavailableDeviceNotCompatibleException e) {
                 showStatusNow("הטלפון הזה לא תומך ב-ARCore, אז AR לא יעבוד עליו.");
                 return;
@@ -235,16 +255,27 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         } catch (Exception e) { return 90; }
     }
 
-    private void showStatusNow(String s) { statusTv.setText(s); statusTv.setVisibility(View.VISIBLE); uiStatus = s; }
+    private void showStatusNow(String s) { statusTv.setText(s); statusTv.setVisibility(View.VISIBLE); }
+
+    private void closeLobby() { lobby.setVisibility(View.GONE); openLobbyBtn.setVisibility(View.VISIBLE); }
 
     /* =============================== room / network =============================== */
 
+    private void startSolo() {
+        closeNet();
+        solo = true;
+        roomInfo.setVisibility(View.GONE);
+        resetRequested = true;
+        closeLobby();
+    }
+
     private void createRoom() {
-        soloChk.setChecked(false);
+        solo = false;
         closeNet();
         String code = String.valueOf(1000 + rnd.nextInt(9000));
         roomCodeTv.setText(code);
         roomInfo.setVisibility(View.VISIBLE);
+        lobbyAutoClosed = false;
         net = new Net(code, true, this);
         resetRequested = true;
     }
@@ -252,11 +283,13 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private void joinRoom(String code) {
         code = code.replaceAll("\\D", "");
         if (code.length() != 4) { showStatusNow("הקלד קוד בן 4 ספרות"); return; }
-        soloChk.setChecked(false);
+        solo = false;
         closeNet();
         roomInfo.setVisibility(View.GONE);
+        lobbyAutoClosed = true;
         net = new Net(code, false, this);
         resetRequested = true;
+        closeLobby();
     }
 
     private void closeNet() {
@@ -264,6 +297,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         net = null;
         if (n != null) n.close();
         brokerUp = false;
+        netError = null;
     }
 
     private void shareCode() {
@@ -304,6 +338,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                     if (a == null || a.length() != 63) { remLast = 0; break; }
                     float[] p = new float[63];
                     for (int i = 0; i < 63; i++) p[i] = (float) a.optDouble(i) / 1000f;
+                    remFilter.filter(p, System.nanoTime());
                     onRemotePose(p, now);
                     break;
                 }
@@ -335,6 +370,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     @Override public void onSurfaceChanged(GL10 gl, int w, int h) {
         GLES20.glViewport(0, 0, w, h);
         viewW = w; viewH = h; geometryDirty = true;
+        scene.setViewportHeight(h);
     }
 
     @Override public void onDrawFrame(GL10 gl) {
@@ -351,9 +387,10 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         long now = SystemClock.uptimeMillis();
         float dt = lastFrame == 0 ? 0.016f : Math.min((now - lastFrame) / 1000f, 0.1f);
         lastFrame = now;
+        float t = (now - t0) / 1000f;
         if (resetRequested) { resetRequested = false; resetGame(); }
         if (net != null && !solo) {
-            if (now - lastHi > 1000) { lastHi = now; JSONObject hi = msg("hi"); send(hi); }
+            if (now - lastHi > 1000) { lastHi = now; send(msg("hi")); }
             if (joinStarted == 0) joinStarted = now;
         } else joinStarted = 0;
         processInbox(now);
@@ -363,39 +400,55 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             moveRequested = false;
             if (anchor != null) { anchor.detach(); anchor = null; }
             mode = PLACING;
+            portalOpen = false; portalOpening = false; openAmt = 0;
             if (sentInside) { sendHand(null); sentInside = false; }
         }
+        float[] camPos = camera.getPose().getTranslation();
         if (tracking) {
             camera.getProjectionMatrix(projM, 0, 0.01f, 30f);
             camera.getViewMatrix(viewM, 0);
-            if (mode == PLACING) updateReticle(frame, camera);
-            else taps.clear();
-            if (anchor != null) computePortal(anchor.getPose());
+            if (mode == PLACING) updatePlacement(frame, camera, now);
+            else handlePlacedTaps(now);
+            if (anchor != null) computePortal(anchor.getPose(), t);
             HandTracker tr = tracker;
-            if (mode == PLACED && tr != null && tr.ready() && !manualActive() && now - lastSubmit > 40) { lastSubmit = now; tr.submit(frame, camera); }
+            if (mode == PLACED && tr != null && tr.ready() && !manualActive() && now - lastSubmit > 35) { lastSubmit = now; tr.submit(frame, camera); }
         } else taps.clear();
 
         consumeHand(now);
-        if (solo && mode == PLACED) onRemotePose(HandMath.poseHand(shownGesture(botGesture), pumpY(now)), now);
+        stepPortal(now, dt);
+        if (solo && portalOpen) onRemotePose(HandMath.poseHand(shownGesture(botGesture), pumpY(now)), now);
         stepRemote(dt, now);
         stepGame(now);
 
         if (tracking) {
             float target = (remShown || myInside) ? 1 : 0;
             glowActive += (target - glowActive) * Math.min(1, dt * 6);
-            float t = (now - t0) / 1000f;
-            scene.begin(viewM, projM, camera.getPose().getTranslation(), t, glowActive);
+            scene.begin(viewM, projM, camPos, t, glowActive);
             if (mode == PLACED) {
                 portalClip();
-                if (myHas && now - myLast < 300 && !manualActive()) scene.drawHand(toWorld(myLocal), 1.5f, true, clip);
-                scene.drawPortal(portalM, floorM, glowActive * 1.2f + (float) Math.sin(t * 4) * 0.12f);
-                if (remShown) scene.drawHand(toWorld(remCur), 1f, false, clip);
-            } else if (reticleOk) scene.drawReticle(reticleM);
+                if (portalOpen && myHas && now - myLast < 300 && !manualActive()) scene.drawOccluder(toWorld(myLocal), clip);
+                scene.drawPortalOpaque(portalM, openAmt, spin);
+                if (remShown && openAmt > 0.9f) scene.drawHand(toWorld(remCur), clip);
+                scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, flash);
+            } else {
+                drawPlanes(s);
+                if (reticleOk) scene.drawReticle(reticleM);
+                else scene.drawGhost(ghostM);
+            }
         }
         updateUi(now);
     }
 
-    private void updateReticle(Frame frame, Camera camera) {
+    private void drawPlanes(Session s) {
+        for (Plane p : s.getAllTrackables(Plane.class)) {
+            if (p.getTrackingState() != TrackingState.TRACKING || p.getSubsumedBy() != null || p.getType() != Plane.Type.HORIZONTAL_UPWARD_FACING) continue;
+            p.getCenterPose().toMatrix(planeM, 0);
+            scene.drawPlane(planeM, p.getPolygon());
+        }
+    }
+
+    /** Placement: on a detected surface (reticle), or in the air in front of the phone (ghost ring). */
+    private void updatePlacement(Frame frame, Camera camera, long now) {
         reticleOk = false;
         reticleHit = null;
         List<HitResult> hits = frame.hitTest(viewW / 2f, viewH / 2f);
@@ -407,25 +460,52 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 break;
             }
         }
-        float[] tap;
+        // where an in-air portal would go: level, facing the phone, AIR_DIST ahead
+        Pose cp = camera.getDisplayOrientedPose();
+        float[] zAxis = cp.getZAxis();             // the camera looks down -Z
+        float[] c = cp.getTranslation();
+        float fx = -zAxis[0], fz = -zAxis[2], fl = (float) Math.hypot(fx, fz);
+        if (fl < 1e-3f) { fx = 0; fz = -1; fl = 1; }
+        fx /= fl; fz /= fl;
+        float ax = c[0] + fx * AIR_DIST, ay = c[1] - 0.05f, az = c[2] + fz * AIR_DIST;
+        float airYaw = (float) Math.toDegrees(Math.atan2(-fx, -fz));
+        Matrix.setIdentityM(ghostM, 0);
+        Matrix.translateM(ghostM, 0, ax, ay, az);
+        Matrix.rotateM(ghostM, 0, airYaw, 0, 1, 0);
+
         boolean tapped = false;
-        while ((tap = taps.poll()) != null) tapped = true;
-        if (tapped && reticleOk) {
+        while (taps.poll() != null) tapped = true;
+        if (!tapped) return;
+        if (reticleOk) {
             anchor = reticleHit.createAnchor();
-            float[] a = anchor.getPose().getTranslation(), c = camera.getPose().getTranslation();
+            floating = false;
+            float[] a = anchor.getPose().getTranslation();
             yaw = (float) Math.toDegrees(Math.atan2(c[0] - a[0], c[2] - a[2]));
-            mode = PLACED;
-            vibrate(30);
+        } else {
+            anchor = session.createAnchor(new Pose(new float[]{ax, ay, az}, new float[]{0, 0, 0, 1}));
+            floating = true;
+            yaw = airYaw;
         }
+        mode = PLACED;
+        placedAt = now;
+        portalOpen = false; portalOpening = false; openAmt = 0; palmSince = 0;
+        vibrate(30);
     }
 
-    private void computePortal(Pose p) {
+    private void handlePlacedTaps(long now) {
+        boolean tapped = false;
+        while (taps.poll() != null) tapped = true;
+        if (tapped && !portalOpen && !portalOpening) startOpening(now);   // a tap also opens it
+    }
+
+    private void computePortal(Pose p, float t) {
         float[] a = p.getTranslation();
         Matrix.setIdentityM(floorM, 0);
         Matrix.translateM(floorM, 0, a[0], a[1], a[2]);
         Matrix.rotateM(floorM, 0, yaw, 0, 1, 0);
         System.arraycopy(floorM, 0, portalM, 0, 16);
-        Matrix.translateM(portalM, 0, 0, SceneRenderer.PORTAL_H, 0);
+        float bob = 0.007f * (float) Math.sin(t * 1.7);       // gentle hover
+        Matrix.translateM(portalM, 0, 0, (floating ? 0 : SceneRenderer.PORTAL_H) + bob, 0);
         Matrix.invertM(portalInv, 0, portalM, 0);
     }
 
@@ -445,10 +525,56 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         return out;
     }
 
+    /* =============================== portal opening =============================== */
+
+    private void startOpening(long now) {
+        portalOpening = true;
+        openStart = now;
+        vibrate(new long[]{0, 30, 50, 60});
+    }
+
+    private void stepPortal(long now, float dt) {
+        if (mode != PLACED) { openAmt = 0; flash = 0; spin = (spin + dt * 20) % 360; return; }
+        if (!portalOpen && !portalOpening) {
+            // an open palm held up near the portal opens it; in button mode it opens by itself
+            boolean palm = myHas && now - myLast < 300 && PAPER.equals(stableGesture()) && handNearPortal();
+            if (manualActive() && now - placedAt > 900) startOpening(now);
+            else if (palm) { if (palmSince == 0) palmSince = now; if (now - palmSince > 350) startOpening(now); }
+            else palmSince = 0;
+        }
+        float spinSpeed = 28;
+        if (portalOpening) {
+            float p = Math.min(1, (now - openStart) / (float) OPEN_MS);
+            openAmt = easeOutBack(p);
+            flash = p < 0.7f ? 1 - p / 0.7f : 0;
+            spinSpeed += 520 * (1 - p) * (1 - p);
+            if (p >= 1) { portalOpening = false; portalOpen = true; openAmt = 1; flash = 0; }
+        }
+        spin = (spin + dt * spinSpeed) % 360;
+    }
+
+    private static float easeOutBack(float x) {
+        float c1 = 1.70158f, c3 = c1 + 1;
+        return 1 + c3 * (float) Math.pow(x - 1, 3) + c1 * (float) Math.pow(x - 1, 2);
+    }
+
+    private boolean handNearPortal() {
+        float cx = (myLocal[0] + myLocal[27] + myLocal[51]) / 3, cy = (myLocal[1] + myLocal[28] + myLocal[52]) / 3, cz = (myLocal[2] + myLocal[29] + myLocal[53]) / 3;
+        return Math.sqrt(cx * cx + cy * cy + cz * cz) < 0.5;
+    }
+
     /* =============================== hands =============================== */
 
     @Override public void onHand(float[] worldPts, float distance) {   // worker thread
         synchronized (handLock) { pendingWorld = worldPts; pendingDist = distance; pendingSeq++; }
+    }
+
+    @Override public void onDebugImage(Bitmap b) {
+        runOnUiThread(() -> {
+            if (!debugChk.isChecked()) { b.recycle(); return; }
+            debugView.setImageBitmap(b);
+            debugView.setVisibility(View.VISIBLE);
+        });
     }
 
     private boolean manualActive() {
@@ -456,24 +582,44 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         return manualPref || tr == null || tr.error != null;
     }
 
+    private String stableGesture() {
+        HashMap<String, Integer> c = new HashMap<>();
+        String best = null; int n = 0;
+        for (String g : gestureHistory) {
+            if (!ROCK.equals(g) && !PAPER.equals(g) && !SCISSORS.equals(g)) continue;
+            int k = c.containsKey(g) ? c.get(g) + 1 : 1;
+            c.put(g, k);
+            if (k > n) { n = k; best = g; }
+        }
+        return n >= 3 ? best : null;
+    }
+
     private void consumeHand(long now) {
         float[] w; float dist; int seq;
         synchronized (handLock) { w = pendingWorld; dist = pendingDist; seq = pendingSeq; }
         if (seq != consumedSeq) {
             consumedSeq = seq;
-            if (w == null || mode != PLACED) { myHas = false; myInside = false; }
-            else {
-                boolean fresh = !myHas || now - myLast > 300;
-                boolean inside = false;
+            if (w == null || mode != PLACED) {
+                myHas = false; myInside = false;
+                gestureHistory.addLast("-");
+                if (gestureHistory.size() > 7) gestureHistory.removeFirst();
+            } else {
+                // gesture from the raw joints (smoothing would only add lag)
+                gestureHistory.addLast(String.valueOf(HandMath.classify(w)));
+                if (gestureHistory.size() > 7) gestureHistory.removeFirst();
                 for (int i = 0; i < 21; i++) {
                     tmp4[0] = w[i * 3]; tmp4[1] = w[i * 3 + 1]; tmp4[2] = w[i * 3 + 2]; tmp4[3] = 1;
                     Matrix.multiplyMV(tmp4b, 0, portalInv, 0, tmp4, 0);
-                    for (int k = 0; k < 3; k++) myLocal[i * 3 + k] = fresh ? tmp4b[k] : myLocal[i * 3 + k] + (tmp4b[k] - myLocal[i * 3 + k]) * 0.65f;
+                    myLocal[i * 3] = tmp4b[0]; myLocal[i * 3 + 1] = tmp4b[1]; myLocal[i * 3 + 2] = tmp4b[2];
+                }
+                myFilter.filter(myLocal, System.nanoTime());
+                boolean inside = false;
+                for (int i = 0; i < 21; i++) {
                     float x = myLocal[i * 3], y = myLocal[i * 3 + 1], z = myLocal[i * 3 + 2];
                     if (z < -0.01f && Math.hypot(x, y) < PORTAL_R * 0.97f) inside = true;
                 }
-                myHas = true; myLast = now; myInside = inside; myDist = dist;
-                myGesture = HandMath.classify(myLocal);
+                myHas = true; myLast = now; myInside = inside && portalOpen; myDist = dist;
+                myGesture = stableGesture();
             }
         }
         if (myHas && now - myLast > 300) { myHas = false; myInside = false; }
@@ -497,9 +643,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     }
 
     private void stepRemote(float dt, long now) {
-        if (remShown && now - remLast > 450) remShown = false;
+        if (remShown && (now - remLast > 450 || !portalOpen)) { remShown = false; remFilter.reset(); }
         if (!remShown) return;
-        float k = 1 - (float) Math.exp(-dt * 18);
+        float k = 1 - (float) Math.exp(-dt * 24);
         for (int i = 0; i < 63; i++) remCur[i] += (remTarget[i] - remCur[i]) * k;
     }
 
@@ -529,7 +675,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     }
 
     private void stepGame(long now) {
-        boolean ready = mode == PLACED;
+        boolean ready = mode == PLACED && portalOpen;
         boolean meIn = ready && myInsideNow(now);
         boolean oppIn = solo || remShown;
         boolean present = opponentPresent(now);
@@ -576,19 +722,18 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
         }
         if ("result".equals(phase) && now > resultUntil) { phase = "idle"; cooldownUntil = now + 900; uiBanner = false; }
 
-        // manual mode: my hand is a cartoon pose sent to the opponent
+        // button mode: my hand is a cartoon pose sent to the opponent
         if (manualActive() && !solo) {
             if (manualInside && ready) {
                 if (now - lastSend > 33) { sendHand(HandMath.poseHand(shownGesture(manualGesture), pumpY(now))); lastSend = now; sentInside = true; }
             } else if (sentInside) { sendHand(null); sentInside = false; }
         }
 
-        // hint line
         String h = "";
-        if ("idle".equals(phase)) {
-            if (!tracking) h = "";
-            else if (!ready) h = "";
-            else if (!solo && net == null) h = "פתח ⚙️ חדר: צור חדר, הצטרף לחבר או שחק נגד המחשב";
+        if ("idle".equals(phase) && tracking && mode == PLACED) {
+            if (!portalOpen && !portalOpening) h = manualActive() ? "" : "✋ פתח את כף היד מול הפורטל כדי לפתוח אותו (או הקש על המסך)";
+            else if (portalOpening) h = "";
+            else if (!solo && net == null) h = "פתח ⚙️ חדר: שחק נגד המחשב או עם חבר";
             else if (!present) h = net != null && net.host ? "מחכים שהחבר יצטרף…" : "מתחבר ליריב…";
             else if (!meIn) h = manualActive() ? "לחץ \"הכנס יד\" ובחר אבן, נייר או מספריים" : "הכנס יד לפורטל כדי להתחיל סיבוב";
             else if (!oppIn) h = "מחכים שהיריב יכניס יד לפורטל…";
@@ -641,34 +786,37 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
 
     private void updateUi(long now) {
         String status;
-        if (!tracking) status = "הזז את הטלפון לאט כדי שהמצלמה תכיר את החדר";
-        else if (mode == PLACING) status = reticleOk ? "הקש על המסך כדי להציב את הפורטל" : "כוון את הטלפון לשולחן או לרצפה";
+        if (!tracking) status = "הזז את הטלפון לאט מצד לצד כדי שהמצלמה תכיר את החדר";
+        else if (mode == PLACING) status = reticleOk ? "הקש על המסך כדי להציב את הפורטל על המשטח" : "הקש כדי להציב את הפורטל באוויר, או כוון לשולחן";
         else status = "";
         String netS;
         if (solo) netS = "🤖 נגד המחשב";
         else if (net == null) netS = "לא מחובר";
-        else if (!brokerUp) netS = netError != null ? "⚠️ " + netError : "⏳ מתחבר…";
+        else if (!brokerUp) netS = netError != null ? "⚠️ " + netError : "⏳ מתחבר לשרת…";
         else if (opponentPresent(now)) netS = "🟢 מחובר · חדר " + net.code;
         else if (net.host) netS = "⏳ מחכה לחבר · " + net.code;
-        else netS = (now - joinStarted > 7000) ? "⚠️ לא נמצא חדר " + net.code : "⏳ מחפש חדר " + net.code + "…";
+        else netS = (now - joinStarted > 8000) ? "⚠️ לא נמצא חדר " + net.code : "⏳ מחפש חדר " + net.code + "…";
         String hand = "";
         boolean hot = false;
         if (mode == PLACED) {
-            if (manualActive()) hand = tracker != null && tracker.error != null ? "זיהוי יד לא נטען · משחקים בכפתורים" : "🎮 כפתורים";
-            else if (tracker == null || !tracker.ready()) hand = "טוען זיהוי יד…";
+            HandTracker tr = tracker;
+            if (manualActive()) hand = tr != null && tr.error != null ? "זיהוי יד לא נטען · משחקים בכפתורים" : "🎮 כפתורים";
+            else if (tr == null || !tr.ready()) hand = "טוען זיהוי יד…";
             else if (!(myHas && now - myLast < 300)) hand = "לא רואה יד";
             else if (myInside) { hand = "🌀 " + (myGesture == null ? "בפורטל" : name(myGesture)); hot = true; }
-            else hand = "✋ יד זוהתה · " + Math.round(myDist * 100) + " ס\"מ";
+            else hand = "✋ " + (myGesture == null ? "יד זוהתה" : name(myGesture)) + " · " + Math.round(myDist * 100) + " ס\"מ";
         }
         String score = opponentPresent(now) ? "אתה " + scoreMe + " : " + scoreOpp + (solo ? " מחשב" : " יריב") : "";
-        boolean manual = manualActive() && mode == PLACED && opponentPresent(now);
+        boolean manual = manualActive() && mode == PLACED && portalOpen && opponentPresent(now);
         boolean move = mode == PLACED;
-        String key = status + "|" + netS + "|" + hand + hot + "|" + score + "|" + uiHint + "|" + uiBanner + bTitle + bSub + bCls + "|" + manual + manualInside + manualGesture + "|" + move;
+        boolean autoCloseLobby = !lobbyAutoClosed && net != null && net.host && opponentPresent(now);
+        if (autoCloseLobby) lobbyAutoClosed = true;
+        String key = status + "|" + netS + "|" + hand + hot + "|" + score + "|" + uiHint + "|" + uiBanner + bTitle + bSub + bCls + "|" + manual + manualInside + manualGesture + "|" + move + autoCloseLobby;
         if (key.equals(shownKey)) return;
         boolean bannerChanged = !shownKey.contains("|" + uiBanner + bTitle + bSub + bCls + "|");
         shownKey = key;
         final String fStatus = status, fNet = netS, fHand = hand, fScore = score, fHint = uiHint, fT = bTitle, fS = bSub, fC = bCls;
-        final boolean fHot = hot, fBanner = uiBanner, fManual = manual, fMove = move, fIn = manualInside, fPop = bannerChanged;
+        final boolean fHot = hot, fBanner = uiBanner, fManual = manual, fMove = move, fIn = manualInside, fPop = bannerChanged, fClose = autoCloseLobby;
         final String fG = manualGesture;
         runOnUiThread(() -> {
             setText(statusTv, fStatus);
@@ -693,6 +841,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             mInBtn.setSelected(fIn);
             gRock.setSelected(ROCK.equals(fG)); gPaper.setSelected(PAPER.equals(fG)); gScissors.setSelected(SCISSORS.equals(fG));
             moveBtn.setVisibility(fMove ? View.VISIBLE : View.GONE);
+            if (fClose) closeLobby();
         });
     }
 
