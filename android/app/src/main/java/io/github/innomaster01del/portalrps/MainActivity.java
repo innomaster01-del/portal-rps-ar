@@ -110,6 +110,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private float[] pendingWorld, pendingImg; private int pendingSeq, consumedSeq; private float pendingDist;
     private String lastGesture; private long lastGestureAt;   // last clear gesture while in the portal
     private float swallowAmt;                                   // 0..1: my real hand hidden by the portal
+    private boolean wasSwallowing; private long enterAt; private float entryX, entryY;   // hand-entry effect
+    private static final long ENTER_MS = 750;
     private final float[] myLocal = new float[63], tmp4 = new float[4], tmp4b = new float[4];
     private final OneEuro myFilter = new OneEuro(1.2, 12, 1.0);
     private final ArrayDeque<String> gestureHistory = new ArrayDeque<>();
@@ -439,13 +441,26 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 portalClip();
                 boolean handFresh = myHas && now - myLast < 300 && !manualActive();
                 float swallowTarget = (handFresh && myInside) ? 1 : 0;
-                swallowAmt += (swallowTarget - swallowAmt) * Math.min(1, dt * (swallowTarget > swallowAmt ? 9 : 4));
+                if (swallowTarget > 0 && !wasSwallowing) {
+                    // the hand just went in: start the effect where it touched the portal
+                    float cx = (myLocal[0] + myLocal[15] + myLocal[27] + myLocal[39] + myLocal[51]) / 5;
+                    float cy = (myLocal[1] + myLocal[16] + myLocal[28] + myLocal[40] + myLocal[52]) / 5;
+                    entryX = Math.max(-0.85f, Math.min(0.85f, cx / PORTAL_R));
+                    entryY = Math.max(-0.85f, Math.min(0.85f, cy / PORTAL_R));
+                    enterAt = now;
+                    vibrate(new long[]{0, 18, 35, 30, 30, 55});
+                }
+                wasSwallowing = swallowTarget > 0;
+                swallowAmt += (swallowTarget - swallowAmt) * Math.min(1, dt * (swallowTarget > swallowAmt ? 5 : 4));
+                float ripple = (enterAt > 0 && now - enterAt < ENTER_MS) ? (now - enterAt) / (float) ENTER_MS : 0;
+                scene.setEntry(entryX, entryY, ripple);
+                float enterFlash = ripple > 0 && ripple < 0.6f ? 1 - ripple / 0.6f : 0;
                 scene.setSwallow(swallowAmt);
                 scene.setOcclusion(swallowAmt < 0.3f);            // in the portal: the portal hides my hand
                 if (portalOpen && handFresh && swallowAmt < 0.3f) scene.drawOccluder(toWorld(myLocal), clip);
                 scene.drawPortalOpaque(portalM, openAmt, spin);
                 if (swallowAmt < 0.3f && remShown && openAmt > 0.9f) scene.drawHand(toWorld(remoteForDraw(now)), clip);
-                scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, flash);
+                scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, Math.max(flash, enterFlash));
                 if (swallowAmt >= 0.3f && remShown && openAmt > 0.9f) {
                     scene.clearDepth();                            // the opponent's hand on top of everything
                     scene.drawHand(toWorld(remoteForDraw(now)), clip);

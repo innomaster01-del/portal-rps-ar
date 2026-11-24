@@ -35,6 +35,7 @@ final class SceneRenderer {
         "precision mediump float;" +
         "uniform vec4 uColor; uniform vec3 uEmissive; uniform vec4 uClip; uniform int uMode; uniform float uTime;" +
         "uniform float uActive; uniform float uSpec; uniform vec3 uLight; uniform vec3 uCam; uniform float uSwallow;" +
+        "uniform vec2 uEntry; uniform float uRipple;" +
         "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying float vDepth;" +
         "uniform sampler2D uDepthTex; uniform float uUseDepth; uniform vec2 uViewport; uniform vec2 uUvA; uniform vec2 uUvB; uniform vec2 uUvC;" +
         "float occlusion(float vd){" +                           // 1 = a real object is in front of this pixel
@@ -48,6 +49,9 @@ final class SceneRenderer {
         " float occ = occlusion(vDepth);" +
         " if (uMode == 1) {" +                                   // semi-transparent vortex
         "  vec2 p = vUV * 2.0 - 1.0; float r = length(p); float a = atan(p.y, p.x); float lr = log(r + 0.03);" +
+        "  float de = length(p - uEntry);" +
+        "  float wave = 0.0; if (uRipple > 0.0) { float rr = uRipple * 2.2; wave = (1.0 - smoothstep(0.0, 0.16, abs(de - rr))) * (1.0 - uRipple); }" +
+        "  lr += wave * 0.7;" +
         "  float arms = smoothstep(0.15, 1.0, sin(a * 3.0 + lr * 9.0 - uTime * 3.0)) * (0.35 + 0.65 * r);" +
         "  float fine = sin(a * 11.0 + lr * 22.0 - uTime * 5.5) * 0.5 + 0.5;" +
         "  arms *= 0.7 + 0.3 * fine;" +
@@ -56,8 +60,13 @@ final class SceneRenderer {
         "  vec3 c = mix(vec3(0.0, 0.07, 0.05), vec3(0.35, 1.0, 0.65), arms);" +
         "  c += vec3(0.7, 1.0, 0.85) * core * 0.7 + vec3(0.25, 1.0, 0.6) * edge * (0.7 + 0.6 * uActive);" +
         "  float alpha = (0.2 + 0.55 * arms + 0.45 * edge + 0.35 * core + 0.1 * uActive) * uColor.a;" +
-        "  alpha = mix(clamp(alpha, 0.0, 0.9) * (1.0 - occ), 1.0, uSwallow);" +   // hand in the portal: swirl turns solid
-        "  c = mix(c, c * 0.85 + vec3(0.0, 0.05, 0.03), uSwallow);" +
+        "  float front = uSwallow * 2.5;" +                    // solid area grows out from where the hand went in
+        "  float solid = 1.0 - smoothstep(front - 0.14, front, de);" +
+        "  float rim = (1.0 - smoothstep(0.0, 0.1, abs(de - front))) * step(0.02, uSwallow) * (1.0 - smoothstep(1.7, 2.5, front));" +
+        "  c = mix(c, c * 0.85 + vec3(0.0, 0.05, 0.03), solid);" +
+        "  c += vec3(0.65, 1.0, 0.82) * (rim * 1.3 + wave * 1.1);" +
+        "  alpha = mix(clamp(alpha, 0.0, 0.9) * (1.0 - occ), 1.0, solid);" +
+        "  alpha = max(alpha, max(rim, wave * 0.8));" +
         "  gl_FragColor = vec4(c, alpha); return; }" +
         " if (uMode == 2) {" +                                   // soft glow / shadow disc
         "  float r = length(vUV * 2.0 - 1.0); float f = 1.0 - smoothstep(0.0, 1.0, r); f *= f;" +
@@ -90,17 +99,18 @@ final class SceneRenderer {
         "}";
 
     private static final String P_VS =
-        "uniform mat4 uMVP; uniform float uTime; uniform float uSize; uniform float uR; uniform float uMaxSize;" +
+        "uniform mat4 uMVP; uniform float uTime; uniform float uSize; uniform float uR; uniform float uMaxSize; uniform float uBurst;" +
         "attribute vec3 aSeed; varying float vA; varying float vDepth;" +
         "void main(){" +
         " float life = fract(uTime * 0.33 + aSeed.x * 0.159);" +
         " float a = aSeed.x + uTime * aSeed.z;" +
         " float inward = step(0.62, fract(aSeed.x * 3.7));" +
         " float r = (uR + aSeed.y) * mix(1.0, 0.15 + 0.85 * (1.0 - life), inward);" +
-        " vec3 p = vec3(cos(a) * r, sin(a) * r, (fract(aSeed.x * 7.3) - 0.5) * 0.03 * (1.0 - inward));" +
+        " r *= 1.0 + uBurst * (0.25 + 0.45 * fract(aSeed.x * 9.1));" +
+        " vec3 p = vec3(cos(a) * r, sin(a) * r, (fract(aSeed.x * 7.3) - 0.5) * 0.03 * (1.0 - inward) + uBurst * 0.06 * fract(aSeed.x * 4.3));" +
         " gl_Position = uMVP * vec4(p, 1.0);" +
         " gl_PointSize = min(uSize * (0.5 + fract(aSeed.x * 5.1)) / max(gl_Position.w, 0.05), uMaxSize);" +
-        " vA = sin(life * 3.14159); vDepth = gl_Position.w;" +
+        " vA = sin(life * 3.14159) * (1.0 + uBurst * 2.0); vDepth = gl_Position.w;" +
         "}";
     private static final String P_FS =
         "precision mediump float; uniform vec3 uColor; uniform float uAlpha; varying float vA; varying float vDepth;" +
@@ -251,6 +261,16 @@ final class SceneRenderer {
         occlusionOn = on;
         GLES20.glUseProgram(prog);
         GLES20.glUniform1f(GLES20.glGetUniformLocation(prog, "uUseDepth"), depthOk && on ? 1f : 0f);
+    }
+
+    private float burst;
+
+    /** Entry effect: ex, ey = where the hand went in (portal disc, -1..1); ripple 0..1 progress, 0 = none. */
+    void setEntry(float ex, float ey, float ripple) {
+        burst = ripple > 0 ? (1 - ripple) * (1 - ripple) : 0;
+        GLES20.glUseProgram(prog);
+        GLES20.glUniform2f(GLES20.glGetUniformLocation(prog, "uEntry"), ex, ey);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(prog, "uRipple"), ripple);
     }
 
     void setSwallow(float s) {
@@ -477,6 +497,7 @@ final class SceneRenderer {
         GLES20.glUniform1f(pR, R);
         GLES20.glUniform3f(pColor, 0.45f, 1.0f, 0.7f);
         GLES20.glUniform1f(pAlpha, alpha);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(pProg, "uBurst"), burst);
         bindOcclusion(pProg);
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, pVbo);
         GLES20.glEnableVertexAttribArray(pSeed);
