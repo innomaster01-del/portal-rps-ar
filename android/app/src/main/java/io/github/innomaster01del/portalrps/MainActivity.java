@@ -111,7 +111,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private String lastGesture; private long lastGestureAt;   // last clear gesture while in the portal
     private float swallowAmt;                                   // 0..1: my real hand hidden by the portal
     private boolean wasSwallowing; private long enterAt; private float entryX, entryY;   // hand-entry effect
-    private static final long ENTER_MS = 750;
+    private static final long ENTER_MS = 750, PULL_MS = 650;
+    private final float[] enterSnap = new float[63], pulled = new float[63];
+    private float remVis;                                       // 0..1: opponent hand out of my portal
     private final float[] myLocal = new float[63], tmp4 = new float[4], tmp4b = new float[4];
     private final OneEuro myFilter = new OneEuro(1.2, 12, 1.0);
     private final ArrayDeque<String> gestureHistory = new ArrayDeque<>();
@@ -448,6 +450,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                     entryX = Math.max(-0.85f, Math.min(0.85f, cx / PORTAL_R));
                     entryY = Math.max(-0.85f, Math.min(0.85f, cy / PORTAL_R));
                     enterAt = now;
+                    System.arraycopy(myLocal, 0, enterSnap, 0, 63);
                     vibrate(new long[]{0, 18, 35, 30, 30, 55});
                 }
                 wasSwallowing = swallowTarget > 0;
@@ -459,9 +462,16 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 scene.setOcclusion(swallowAmt < 0.3f);            // in the portal: the portal hides my hand
                 if (portalOpen && handFresh && swallowAmt < 0.3f) scene.drawOccluder(toWorld(myLocal), clip);
                 scene.drawPortalOpaque(portalM, openAmt, spin);
-                if (swallowAmt < 0.3f && remShown && openAmt > 0.9f) scene.drawHand(toWorld(remoteForDraw(now)), clip);
+                // the opponent's hand comes out only while my hand is in the portal too
+                boolean iAmIn = manualActive() ? manualInside : (myInside && handFresh && enterAt > 0 && now - enterAt > PULL_MS * 0.7f);
+                float visTarget = (remShown && iAmIn && openAmt > 0.9f) ? 1 : 0;
+                if (visTarget > 0 && remVis < 0.02f) vibrate(25);
+                remVis += (visTarget - remVis) * Math.min(1, dt * (visTarget > remVis ? 5 : 7));
+                boolean drawRemote = remVis > 0.01f && remShown;
+                if (swallowAmt < 0.3f && drawRemote) scene.drawHand(toWorld(remoteForDraw(now)), clip);
                 scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, Math.max(flash, enterFlash));
-                if (swallowAmt >= 0.3f && remShown && openAmt > 0.9f) {
+                if (enterAt > 0 && now - enterAt < PULL_MS) scene.drawEnteringHand(toWorld(pulledHand(now)), clip, pullAlpha(now));
+                if (swallowAmt >= 0.3f && drawRemote) {
                     scene.clearDepth();                            // the opponent's hand on top of everything
                     scene.drawHand(toWorld(remoteForDraw(now)), clip);
                 }
@@ -720,14 +730,37 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     private void onRemotePose(float[] p, long now) {
         float[] q = HandMath.receiverPose(p);       // same fingers, always coming out toward me
         System.arraycopy(q, 0, remTarget, 0, 63);
-        if (!remShown) { System.arraycopy(remTarget, 0, remCur, 0, 63); remShown = true; remShownAt = now; vibrate(25); }
+        if (!remShown) { System.arraycopy(remTarget, 0, remCur, 0, 63); remShown = true; remShownAt = now; }
         remLast = now;
     }
 
-    /** Opponent hand for drawing: slides out of the portal during the first 350 ms. */
+    /** My hand being pulled into the portal: moves in through the surface, twists a little and shrinks. */
+    private float[] pulledHand(long now) {
+        float e = Math.min(1, (now - enterAt) / (float) PULL_MS);
+        float k = e * e * (3 - 2 * e);
+        float cx = 0, cy = 0, cz = 0;
+        for (int id : new int[]{0, 5, 9, 13, 17}) { cx += enterSnap[id * 3] / 5; cy += enterSnap[id * 3 + 1] / 5; cz += enterSnap[id * 3 + 2] / 5; }
+        double ang = Math.toRadians(35 * k);
+        float ca = (float) Math.cos(ang), sa = (float) Math.sin(ang), sc = 1 - 0.3f * k;
+        for (int i = 0; i < 21; i++) {
+            float x = (enterSnap[i * 3] - cx) * sc, y = (enterSnap[i * 3 + 1] - cy) * sc, z = (enterSnap[i * 3 + 2] - cz) * sc;
+            float rx = x * ca - y * sa, ry = x * sa + y * ca;
+            pulled[i * 3] = cx * (1 - 0.6f * k) + rx;          // drawn toward the middle of the swirl
+            pulled[i * 3 + 1] = cy * (1 - 0.6f * k) + ry;
+            pulled[i * 3 + 2] = cz - (Math.max(cz, 0) + 0.3f) * k + z;   // through the surface and gone
+        }
+        return pulled;
+    }
+
+    private float pullAlpha(long now) {
+        float e = Math.min(1, (now - enterAt) / (float) PULL_MS);
+        return e < 0.7f ? 1 : 1 - (e - 0.7f) / 0.3f;
+    }
+
+    /** Opponent hand for drawing: slides out of the portal as it becomes visible, back in as it hides. */
     private float[] remoteForDraw(long now) {
-        float e = Math.min(1, (now - remShownAt) / 350f);
-        float back = 0.24f * (1 - e) * (1 - e) * (1 - e);
+        float e = remVis;
+        float back = 0.24f * (1 - e) * (1 - e);
         for (int i = 0; i < 21; i++) for (int k = 0; k < 3; k++) remDraw[i * 3 + k] = remCur[i * 3 + k] - outF[k] * back;
         return remDraw;
     }

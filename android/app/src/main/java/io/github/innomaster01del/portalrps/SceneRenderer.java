@@ -134,7 +134,7 @@ final class SceneRenderer {
     private java.nio.ByteBuffer depthBuf;
     private float vpW = 1, vpH = 1;
     private Mesh sphere, ring, ringGlow, disc, reticle, glowDisc, notch, flashRing;
-    private final HandMesh remoteMesh = new HandMesh(true), occMesh = new HandMesh(false), energyMesh = new HandMesh(false);
+    private final HandMesh remoteMesh = new HandMesh(true), occMesh = new HandMesh(false), energyMesh = new HandMesh(false), enterMesh = new HandMesh(false);
     private final float[] view = new float[16], proj = new float[16], vp = new float[16], mvp = new float[16];
     private final float[] tmp = new float[16], tmp2 = new float[16], ident = new float[16];
     private final float[] cam = new float[3];
@@ -286,6 +286,16 @@ final class SceneRenderer {
         blend(true, false);
         setCommon(ident, 1, 1, 1, alpha, 0, 0, 0, 5, NO_CLIP, 0);
         energyMesh.draw(aPos, aNormal, aUV, 0, energyMesh.skinIdxCount);
+        blend(false, false);
+    }
+
+    /** A copy of my hand being pulled into the portal (cut off at the portal surface), fading out. */
+    void drawEnteringHand(float[] worldPts, float[] clip, float alpha) {
+        enterMesh.update(worldPts, 1f);
+        enterMesh.upload();
+        blend(true, false);
+        setCommon(ident, 0.95f, 0.74f, 0.6f, alpha, 0.03f, 0.012f, 0.008f, 0, clip, 0.22f);
+        enterMesh.draw(aPos, aNormal, aUV, 0, enterMesh.skinIdxCount);
         blend(false, false);
     }
 
