@@ -438,8 +438,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             if (mode == PLACED) {
                 portalClip();
                 boolean handFresh = myHas && now - myLast < 300 && !manualActive();
-                float target = (handFresh && myInside) ? 1 : 0;
-                swallowAmt += (target - swallowAmt) * Math.min(1, dt * (target > swallowAmt ? 9 : 4));
+                float swallowTarget = (handFresh && myInside) ? 1 : 0;
+                swallowAmt += (swallowTarget - swallowAmt) * Math.min(1, dt * (swallowTarget > swallowAmt ? 9 : 4));
                 scene.setSwallow(swallowAmt);
                 scene.setOcclusion(swallowAmt < 0.3f);            // in the portal: the portal hides my hand
                 if (portalOpen && handFresh && swallowAmt < 0.3f) scene.drawOccluder(toWorld(myLocal), clip);
