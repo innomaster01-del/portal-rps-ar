@@ -34,7 +34,7 @@ final class SceneRenderer {
     private static final String FS =
         "precision mediump float;" +
         "uniform vec4 uColor; uniform vec3 uEmissive; uniform vec4 uClip; uniform int uMode; uniform float uTime;" +
-        "uniform float uActive; uniform float uSpec; uniform vec3 uLight; uniform vec3 uCam;" +
+        "uniform float uActive; uniform float uSpec; uniform vec3 uLight; uniform vec3 uCam; uniform float uSwallow;" +
         "varying vec3 vN; varying vec3 vW; varying vec2 vUV; varying float vDepth;" +
         "uniform sampler2D uDepthTex; uniform float uUseDepth; uniform vec2 uViewport; uniform vec2 uUvA; uniform vec2 uUvB; uniform vec2 uUvC;" +
         "float occlusion(float vd){" +                           // 1 = a real object is in front of this pixel
@@ -56,10 +56,17 @@ final class SceneRenderer {
         "  vec3 c = mix(vec3(0.0, 0.07, 0.05), vec3(0.35, 1.0, 0.65), arms);" +
         "  c += vec3(0.7, 1.0, 0.85) * core * 0.7 + vec3(0.25, 1.0, 0.6) * edge * (0.7 + 0.6 * uActive);" +
         "  float alpha = (0.2 + 0.55 * arms + 0.45 * edge + 0.35 * core + 0.1 * uActive) * uColor.a;" +
-        "  gl_FragColor = vec4(c, clamp(alpha, 0.0, 0.9) * (1.0 - occ)); return; }" +
+        "  alpha = mix(clamp(alpha, 0.0, 0.9) * (1.0 - occ), 0.97, uSwallow);" +   // hand in the portal: swirl turns solid
+        "  c = mix(c, c * 0.85 + vec3(0.0, 0.05, 0.03), uSwallow);" +
+        "  gl_FragColor = vec4(c, alpha); return; }" +
         " if (uMode == 2) {" +                                   // soft glow / shadow disc
         "  float r = length(vUV * 2.0 - 1.0); float f = 1.0 - smoothstep(0.0, 1.0, r); f *= f;" +
         "  f *= 1.0 - occ; gl_FragColor = vec4(uColor.rgb * f, uColor.a * f); return; }" +
+        " if (uMode == 5) {" +
+        "  float w = sin(dot(vW, vec3(55.0, 42.0, 37.0)) - uTime * 7.0) * 0.5 + 0.5;" +
+        "  float w2 = sin(dot(vW, vec3(-31.0, 66.0, 21.0)) + uTime * 4.0) * 0.5 + 0.5;" +
+        "  vec3 c = mix(vec3(0.02, 0.18, 0.11), vec3(0.4, 1.0, 0.68), w * w2);" +
+        "  gl_FragColor = vec4(c, uColor.a); return; }" +
         " if (occ > 0.5) discard;" +
         " if (uMode == 3) {" +                                   // energy ring: pulses running around
         "  float u = vUV.x; float k = pow(0.5 + 0.5 * sin(u * 37.7 - uTime * 6.0), 6.0) + pow(0.5 + 0.5 * sin(u * 18.85 + uTime * 3.0), 10.0);" +
@@ -83,7 +90,7 @@ final class SceneRenderer {
         "}";
 
     private static final String P_VS =
-        "uniform mat4 uMVP; uniform float uTime; uniform float uSize; uniform float uR;" +
+        "uniform mat4 uMVP; uniform float uTime; uniform float uSize; uniform float uR; uniform float uMaxSize;" +
         "attribute vec3 aSeed; varying float vA; varying float vDepth;" +
         "void main(){" +
         " float life = fract(uTime * 0.33 + aSeed.x * 0.159);" +
@@ -92,7 +99,7 @@ final class SceneRenderer {
         " float r = (uR + aSeed.y) * mix(1.0, 0.15 + 0.85 * (1.0 - life), inward);" +
         " vec3 p = vec3(cos(a) * r, sin(a) * r, (fract(aSeed.x * 7.3) - 0.5) * 0.03 * (1.0 - inward));" +
         " gl_Position = uMVP * vec4(p, 1.0);" +
-        " gl_PointSize = uSize * (0.5 + fract(aSeed.x * 5.1)) / max(gl_Position.w, 0.05);" +
+        " gl_PointSize = min(uSize * (0.5 + fract(aSeed.x * 5.1)) / max(gl_Position.w, 0.05), uMaxSize);" +
         " vA = sin(life * 3.14159); vDepth = gl_Position.w;" +
         "}";
     private static final String P_FS =
@@ -117,7 +124,7 @@ final class SceneRenderer {
     private java.nio.ByteBuffer depthBuf;
     private float vpW = 1, vpH = 1;
     private Mesh sphere, ring, ringGlow, disc, reticle, glowDisc, notch, flashRing;
-    private final HandMesh remoteMesh = new HandMesh(true), occMesh = new HandMesh(false);
+    private final HandMesh remoteMesh = new HandMesh(true), occMesh = new HandMesh(false), energyMesh = new HandMesh(false);
     private final float[] view = new float[16], proj = new float[16], vp = new float[16], mvp = new float[16];
     private final float[] tmp = new float[16], tmp2 = new float[16], ident = new float[16];
     private final float[] cam = new float[3];
@@ -166,7 +173,7 @@ final class SceneRenderer {
         pColor = GLES20.glGetUniformLocation(pProg, "uColor");
         pAlpha = GLES20.glGetUniformLocation(pProg, "uAlpha");
         Random rnd = new Random(7);
-        pCount = 140;
+        pCount = 90;
         float[] seeds = new float[pCount * 3];
         for (int i = 0; i < pCount; i++) {
             seeds[i * 3] = (float) (rnd.nextFloat() * Math.PI * 2);
@@ -236,12 +243,41 @@ final class SceneRenderer {
 
     void setDepthAvailable(boolean ok) { if (!ok) depthOk = false; }
 
+    private boolean occlusionOn = true;
+    private float swallow;
+
+    /** Off while the player's hand is in the portal: then the portal must hide it, not the other way round. */
+    void setOcclusion(boolean on) {
+        occlusionOn = on;
+        GLES20.glUseProgram(prog);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(prog, "uUseDepth"), depthOk && on ? 1f : 0f);
+    }
+
+    void setSwallow(float s) {
+        swallow = s;
+        GLES20.glUseProgram(prog);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(prog, "uSwallow"), s);
+    }
+
+    /** My tracked hand drawn as portal energy, covering the real hand on screen. */
+    void drawEnergyHand(float[] worldPts, float alpha) {
+        energyMesh.update(worldPts, 1.3f);
+        energyMesh.upload();
+        blend(true, false);
+        setCommon(ident, 1, 1, 1, alpha, 0, 0, 0, 5, NO_CLIP, 0);
+        energyMesh.draw(aPos, aNormal, aUV, 0, energyMesh.skinIdxCount);
+        blend(false, false);
+    }
+
+    /** Lets the opponent's hand draw over everything already on screen. */
+    void clearDepth() { GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT); }
+
     private void bindOcclusion(int program) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, depthTex);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uDepthTex"), 1);
-        GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uUseDepth"), depthOk ? 1f : 0f);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uUseDepth"), depthOk && occlusionOn ? 1f : 0f);
         GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uViewport"), vpW, vpH);
         GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uUvA"), uvA[0], uvA[1]);
         GLES20.glUniform2f(GLES20.glGetUniformLocation(program, "uUvB"), uvB[0], uvB[1]);
@@ -291,6 +327,7 @@ final class SceneRenderer {
         GLES20.glUniform3f(uCam, cam[0], cam[1], cam[2]);
         GLES20.glUniform1f(uTime, time);
         GLES20.glUniform1f(uActive, active);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(prog, "uSwallow"), swallow);
         bindOcclusion(prog);
     }
 
@@ -435,7 +472,8 @@ final class SceneRenderer {
         GLES20.glUseProgram(pProg);
         GLES20.glUniformMatrix4fv(pMVP, 1, false, mvp, 0);
         GLES20.glUniform1f(pTime, time);
-        GLES20.glUniform1f(pSize, 22f * pointScale);
+        GLES20.glUniform1f(pSize, 7f * pointScale);
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(pProg, "uMaxSize"), 11f * pointScale);
         GLES20.glUniform1f(pR, R);
         GLES20.glUniform3f(pColor, 0.45f, 1.0f, 0.7f);
         GLES20.glUniform1f(pAlpha, alpha);

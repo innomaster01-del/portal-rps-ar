@@ -107,7 +107,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
 
     // my hand (portal-local)
     private final Object handLock = new Object();
-    private float[] pendingWorld; private int pendingSeq, consumedSeq; private float pendingDist;
+    private float[] pendingWorld, pendingImg; private int pendingSeq, consumedSeq; private float pendingDist;
+    private String lastGesture; private long lastGestureAt;   // last clear gesture while in the portal
+    private float swallowAmt;                                   // 0..1: my real hand hidden by the portal
     private final float[] myLocal = new float[63], tmp4 = new float[4], tmp4b = new float[4];
     private final OneEuro myFilter = new OneEuro(1.2, 12, 1.0);
     private final ArrayDeque<String> gestureHistory = new ArrayDeque<>();
@@ -435,10 +437,21 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
             scene.begin(viewM, projM, camPos, t, glowActive);
             if (mode == PLACED) {
                 portalClip();
-                if (portalOpen && myHas && now - myLast < 300 && !manualActive()) scene.drawOccluder(toWorld(myLocal), clip);
+                boolean handFresh = myHas && now - myLast < 300 && !manualActive();
+                float target = (handFresh && myInside) ? 1 : 0;
+                swallowAmt += (target - swallowAmt) * Math.min(1, dt * (target > swallowAmt ? 9 : 4));
+                scene.setSwallow(swallowAmt);
+                scene.setOcclusion(swallowAmt < 0.3f);            // in the portal: the portal hides my hand
+                if (portalOpen && handFresh && swallowAmt < 0.3f) scene.drawOccluder(toWorld(myLocal), clip);
                 scene.drawPortalOpaque(portalM, openAmt, spin);
-                if (remShown && openAmt > 0.9f) scene.drawHand(toWorld(remoteForDraw(now)), clip);
+                if (swallowAmt < 0.3f && remShown && openAmt > 0.9f) scene.drawHand(toWorld(remoteForDraw(now)), clip);
                 scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, flash);
+                if (swallowAmt > 0.02f && handFresh) scene.drawEnergyHand(toWorld(myLocal), swallowAmt);
+                if (swallowAmt >= 0.3f && remShown && openAmt > 0.9f) {
+                    scene.clearDepth();                            // the opponent's hand on top of everything
+                    scene.drawHand(toWorld(remoteForDraw(now)), clip);
+                }
+                scene.setOcclusion(true);
             } else {
                 drawPlanes(s);
                 if (reticleOk) scene.drawReticle(reticleM);
@@ -597,8 +610,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
 
     /* =============================== hands =============================== */
 
-    @Override public void onHand(float[] worldPts, float distance) {   // worker thread
-        synchronized (handLock) { pendingWorld = worldPts; pendingDist = distance; pendingSeq++; }
+    @Override public void onHand(float[] worldPts, float[] imagePts, float distance) {   // worker thread
+        synchronized (handLock) { pendingWorld = worldPts; pendingImg = imagePts; pendingDist = distance; pendingSeq++; }
     }
 
     @Override public void onDebugImage(Bitmap b) {
@@ -627,8 +640,8 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
     }
 
     private void consumeHand(long now) {
-        float[] w; float dist; int seq;
-        synchronized (handLock) { w = pendingWorld; dist = pendingDist; seq = pendingSeq; }
+        float[] w, img; float dist; int seq;
+        synchronized (handLock) { w = pendingWorld; img = pendingImg; dist = pendingDist; seq = pendingSeq; }
         if (seq != consumedSeq) {
             consumedSeq = seq;
             if (w == null || mode != PLACED) {
@@ -636,8 +649,10 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 gestureHistory.addLast("-");
                 if (gestureHistory.size() > 7) gestureHistory.removeFirst();
             } else {
-                // gesture from the raw joints (smoothing would only add lag)
-                gestureHistory.addLast(String.valueOf(HandMath.classify(w)));
+                // gesture from the raw joints (smoothing would only add lag): the picture first,
+                // it is steadier than the 3D depth; 3D when the picture is unclear
+                String g2 = img != null ? HandMath.classify(img) : null;
+                gestureHistory.addLast(String.valueOf(g2 != null ? g2 : HandMath.classify(w)));
                 if (gestureHistory.size() > 7) gestureHistory.removeFirst();
                 for (int i = 0; i < 21; i++) {
                     tmp4[0] = w[i * 3]; tmp4[1] = w[i * 3 + 1]; tmp4[2] = w[i * 3 + 2]; tmp4[3] = 1;
@@ -648,6 +663,7 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 boolean inside = handOnPortal(w, dist);
                 myHas = true; myLast = now; myInside = inside && portalOpen; myDist = dist;
                 myGesture = stableGesture();
+                if (myInside && myGesture != null) { lastGesture = myGesture; lastGestureAt = now; }
             }
         }
         if (myHas && now - myLast > 300) { myHas = false; myInside = false; }
@@ -766,7 +782,9 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 if (g != null) votes.put(g, votes.containsKey(g) ? votes.get(g) + 1 : 1);
             }
             if (now >= shootAt + WINDOW_AFTER) {
-                myThrow = majority(); myThrowSet = true;
+                myThrow = majority();
+                if (myThrow == null && !manualActive() && lastGesture != null && now - lastGestureAt < 1500) myThrow = lastGesture;
+                myThrowSet = true;
                 phase = "wait"; waitUntil = now + 2500;
                 if (solo) { oppThrow = botGesture; oppThrowSet = true; }
                 else if (net != null && !net.host) {

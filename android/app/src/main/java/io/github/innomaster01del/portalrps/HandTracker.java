@@ -31,8 +31,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class HandTracker {
     interface Listener {
-        /** worldPts: float[63] in ARCore world metres, or null when no hand. distance in metres. */
-        void onHand(float[] worldPts, float distance);
+        /**
+         * worldPts: float[63] in ARCore world metres, or null when no hand. imagePts: the same joints as
+         * seen in the upright picture (pixels, z = 0) — steadier for reading the gesture. distance in metres.
+         */
+        void onHand(float[] worldPts, float[] imagePts, float distance);
         /** Optional: the picture the detector saw, with the found joints drawn on it. */
         default void onDebugImage(Bitmap b) {}
     }
@@ -149,10 +152,11 @@ final class HandTracker {
         boolean found = !res.landmarks().isEmpty() && !res.worldLandmarks().isEmpty();
         if (debug) sendDebug(bmp, found ? res.landmarks().get(0) : null);
         bmp.recycle();
-        if (!found) { listener.onHand(null, 0); return; }
+        if (!found) { listener.onHand(null, null, 0); return; }
         List<NormalizedLandmark> lm = res.landmarks().get(0);
         List<Landmark> wl = res.worldLandmarks().get(0);
-        float[] nx = new float[21], ny = new float[21], wp = new float[63];
+        float[] nx = new float[21], ny = new float[21], wp = new float[63], img = new float[63];
+        for (int i = 0; i < 21; i++) { img[i * 3] = lm.get(i).x() * ow; img[i * 3 + 1] = lm.get(i).y() * oh; }
         for (int i = 0; i < 21; i++) {
             float xu = lm.get(i).x(), yu = lm.get(i).y();          // upright, normalised
             float wx = wl.get(i).x(), wy = wl.get(i).y(), wz = wl.get(i).z();
@@ -168,7 +172,7 @@ final class HandTracker {
             wp[i * 3] = wu; wp[i * 3 + 1] = wv; wp[i * 3 + 2] = wz;
         }
         double[] t = HandMath.solveTranslation(nx, ny, wp);
-        if (t == null) { listener.onHand(null, 0); return; }
+        if (t == null) { listener.onHand(null, null, 0); return; }
         float[] out = new float[63];
         float[] pc = new float[3];
         for (int i = 0; i < 21; i++) {
@@ -179,7 +183,7 @@ final class HandTracker {
             float[] wpt = pose.transformPoint(pc);
             out[i * 3] = wpt[0]; out[i * 3 + 1] = wpt[1]; out[i * 3 + 2] = wpt[2];
         }
-        listener.onHand(out, (float) t[2]);
+        listener.onHand(out, img, (float) t[2]);
     }
 
     private long lastDebug;

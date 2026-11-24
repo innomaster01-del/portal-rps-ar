@@ -77,17 +77,20 @@ public final class HandMath {
         float bend = angleDeg(p, m, pip, pip, tip);      // how bent the finger is
         float align = angleDeg(p, 0, m, m, tip);         // does it point away from the wrist
         float reach = dist(p, tip, 0) / Math.max(dist(p, m, 0), 1e-6f);
-        if (bend < 50 && align < 50 && reach > 1.45f) return 1;
-        if (bend > 75 || align > 85 || reach < 1.25f) return -1;
+        // lenient: real hands seen from awkward angles look shorter and more bent than they are
+        if (bend < 65 && align < 70 && reach > 1.3f) return 1;
+        if (bend > 80 || reach < 1.15f) return -1;
         return 0;
     }
 
-    /** Rock / paper / scissors from 21 3D points (any frame, any scale). null when unclear. */
+    /** Rock / paper / scissors from 21 points (3D, or 2D image points with z = 0). null when unclear. */
     public static String classify(float[] p) {
-        int i = fingerState(p, 0), m = fingerState(p, 1), r = fingerState(p, 2), k = fingerState(p, 3);
-        if (i == 1 && m == 1 && r == -1) return SCISSORS;          // pinky ignored: often half-bent
-        if (i == 1 && m == 1 && r == 1) return PAPER;               // pinky ignored too
-        if (i == -1 && m == -1 && r == -1 && k != 1) return ROCK;
+        int[] st = {fingerState(p, 0), fingerState(p, 1), fingerState(p, 2), fingerState(p, 3)};
+        int up = 0, down = 0;
+        for (int v : st) { if (v == 1) up++; if (v == -1) down++; }
+        if (st[0] == 1 && st[1] == 1 && st[2] != 1 && st[3] != 1) return SCISSORS;
+        if (up >= 3) return PAPER;
+        if (up == 0 && down >= 2) return ROCK;
         return null;
     }
 
