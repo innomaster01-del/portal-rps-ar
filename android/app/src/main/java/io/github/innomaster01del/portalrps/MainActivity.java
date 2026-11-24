@@ -446,7 +446,6 @@ public class MainActivity extends AppCompatActivity implements GLSurfaceView.Ren
                 scene.drawPortalOpaque(portalM, openAmt, spin);
                 if (swallowAmt < 0.3f && remShown && openAmt > 0.9f) scene.drawHand(toWorld(remoteForDraw(now)), clip);
                 scene.drawPortalTransparent(portalM, floating ? null : floorM, openAmt, spin, flash);
-                if (swallowAmt > 0.02f && handFresh) scene.drawEnergyHand(toWorld(myLocal), swallowAmt);
                 if (swallowAmt >= 0.3f && remShown && openAmt > 0.9f) {
                     scene.clearDepth();                            // the opponent's hand on top of everything
                     scene.drawHand(toWorld(remoteForDraw(now)), clip);

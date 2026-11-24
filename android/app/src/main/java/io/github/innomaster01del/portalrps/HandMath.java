@@ -88,8 +88,11 @@ public final class HandMath {
         int[] st = {fingerState(p, 0), fingerState(p, 1), fingerState(p, 2), fingerState(p, 3)};
         int up = 0, down = 0;
         for (int v : st) { if (v == 1) up++; if (v == -1) down++; }
-        if (st[0] == 1 && st[1] == 1 && st[2] != 1 && st[3] != 1) return SCISSORS;
+        // scissors needs the ring finger clearly folded; two straight fingers with the other two
+        // just unclear is far more often an open hand seen at an angle
+        if (st[0] == 1 && st[1] == 1 && st[2] == -1 && st[3] != 1) return SCISSORS;
         if (up >= 3) return PAPER;
+        if (st[0] == 1 && st[1] == 1 && st[2] == 0 && st[3] == 0) return PAPER;
         if (up == 0 && down >= 2) return ROCK;
         return null;
     }

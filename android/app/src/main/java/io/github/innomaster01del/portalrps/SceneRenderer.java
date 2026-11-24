@@ -56,7 +56,7 @@ final class SceneRenderer {
         "  vec3 c = mix(vec3(0.0, 0.07, 0.05), vec3(0.35, 1.0, 0.65), arms);" +
         "  c += vec3(0.7, 1.0, 0.85) * core * 0.7 + vec3(0.25, 1.0, 0.6) * edge * (0.7 + 0.6 * uActive);" +
         "  float alpha = (0.2 + 0.55 * arms + 0.45 * edge + 0.35 * core + 0.1 * uActive) * uColor.a;" +
-        "  alpha = mix(clamp(alpha, 0.0, 0.9) * (1.0 - occ), 0.97, uSwallow);" +   // hand in the portal: swirl turns solid
+        "  alpha = mix(clamp(alpha, 0.0, 0.9) * (1.0 - occ), 1.0, uSwallow);" +   // hand in the portal: swirl turns solid
         "  c = mix(c, c * 0.85 + vec3(0.0, 0.05, 0.03), uSwallow);" +
         "  gl_FragColor = vec4(c, alpha); return; }" +
         " if (uMode == 2) {" +                                   // soft glow / shadow disc
